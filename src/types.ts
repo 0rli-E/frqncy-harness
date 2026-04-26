@@ -12,8 +12,27 @@ export const TRACE_SCHEMA_VERSION = '0.1.0';
 // Provider model strings — `<provider>/<model>` namespace
 // ────────────────────────────────────────────────────────────────────
 
-export const PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter'] as const;
+/**
+ * Supported providers.
+ *
+ * API providers (require API key, full feature support — tools, caching, streaming):
+ *   - anthropic, openai, google, openrouter
+ *
+ * Subscription providers (subprocess-wrap an official CLI; uses your $200/mo subscription
+ * quota instead of API tokens; no tool support — the official CLI does its own tooling):
+ *   - claude-code (wraps `claude -p`; uses Claude Max)
+ *   - codex (wraps `codex exec`; uses ChatGPT Pro)
+ */
+export const API_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter'] as const;
+export const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'] as const;
+export const PROVIDERS = [...API_PROVIDERS, ...SUBSCRIPTION_PROVIDERS] as const;
+export type ApiProvider = (typeof API_PROVIDERS)[number];
+export type SubscriptionProvider = (typeof SUBSCRIPTION_PROVIDERS)[number];
 export type Provider = (typeof PROVIDERS)[number];
+
+export function isSubscriptionProvider(p: Provider): p is SubscriptionProvider {
+  return (SUBSCRIPTION_PROVIDERS as readonly string[]).includes(p);
+}
 
 /**
  * A model string is `<provider>/<model-name>`. Examples:

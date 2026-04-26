@@ -22,7 +22,16 @@ import { z } from 'zod';
 
 export const DEFAULT_AUTH_PATH = join(homedir(), '.frqncy-harness', 'auth', 'keys.json');
 
-export const AUTH_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter'] as const;
+export const AUTH_PROVIDERS = [
+  // LLM providers
+  'anthropic',
+  'openai',
+  'google',
+  'openrouter',
+  // Web search providers (used by web_search tool)
+  'tavily',
+  'brave',
+] as const;
 export type AuthProvider = (typeof AUTH_PROVIDERS)[number];
 
 export const ENV_VAR_BY_PROVIDER: Record<AuthProvider, string> = {
@@ -30,6 +39,8 @@ export const ENV_VAR_BY_PROVIDER: Record<AuthProvider, string> = {
   openai: 'OPENAI_API_KEY',
   google: 'GOOGLE_GENERATIVE_AI_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
+  tavily: 'TAVILY_API_KEY',
+  brave: 'BRAVE_SEARCH_API_KEY',
 };
 
 export const AuthStoreSchema = z.object({

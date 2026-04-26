@@ -44,13 +44,14 @@ Commands:
                            | enable <name> | disable <name> | path
                            | import-from-claude-desktop | test [<name>]
   auth <subcmd> [args]     status | set <provider> <key> | unset <provider> | path
-                           (login/logout for Claude Max OAuth in v0.3)
+                           (OAuth login is NOT available — Anthropic/OpenAI ToS forbids
+                            consumer-subscription OAuth tokens in third-party tools)
 
 Global:
   --version, -v            Print version
   --help, -h               This help
 
-Model strings:
+Model strings (API path — pay per token, full feature support):
   anthropic/claude-sonnet-4-6
   anthropic/claude-opus-4-6
   anthropic/claude-haiku-4-5-20251001
@@ -60,18 +61,27 @@ Model strings:
   google/gemini-2.5-flash
   openrouter/<provider>/<model>   (e.g. openrouter/nousresearch/hermes-4-405b)
 
+Model strings (subscription path — uses your Max/Pro quota; no tools, limited streaming):
+  claude-code/sonnet              (requires "claude" CLI installed; uses Claude Max)
+  claude-code/opus
+  claude-code/haiku
+  codex/default                   (requires "codex" CLI installed; uses ChatGPT Pro)
+  codex/gpt-5
+
 Examples:
   frqncy-harness chat "summarize the harness.md doc"
   frqncy-harness chat "explain MCP" --model openai/gpt-5
+  frqncy-harness chat "what is MCP" --model claude-code/sonnet     # uses Claude Max
+  frqncy-harness chat "explain context graphs" --model codex/default # uses ChatGPT Pro
   frqncy-harness repl --model openrouter/nousresearch/hermes-4-405b
-  frqncy-harness config set defaultModel anthropic/claude-sonnet-4-6
+  frqncy-harness config set defaultModel claude-code/sonnet
   frqncy-harness config set costCap.softWarnUsd 10
   frqncy-harness costs --period 30d
 
 Docs: https://github.com/0rli-E/frqncy-harness#readme
 `;
 
-const VERSION = '0.3.0-alpha.1';
+const VERSION = '0.4.0-alpha.1';
 
 interface ParsedArgs {
   command?: string;

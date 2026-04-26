@@ -53,10 +53,12 @@ export async function runDoctorCommand(): Promise<void> {
 
   // ── Provider API keys ────────────────────────────────────────
   const keyChecks = [
-    { name: 'ANTHROPIC_API_KEY (or Claude Max OAuth — coming v0.2)', envVar: 'ANTHROPIC_API_KEY' },
+    { name: 'ANTHROPIC_API_KEY', envVar: 'ANTHROPIC_API_KEY' },
     { name: 'OPENAI_API_KEY', envVar: 'OPENAI_API_KEY' },
     { name: 'GOOGLE_GENERATIVE_AI_API_KEY', envVar: 'GOOGLE_GENERATIVE_AI_API_KEY' },
     { name: 'OPENROUTER_API_KEY', envVar: 'OPENROUTER_API_KEY' },
+    { name: 'TAVILY_API_KEY (web_search)', envVar: 'TAVILY_API_KEY' },
+    { name: 'BRAVE_SEARCH_API_KEY (web_search)', envVar: 'BRAVE_SEARCH_API_KEY' },
   ];
   for (const check of keyChecks) {
     const value = process.env[check.envVar];
@@ -70,6 +72,17 @@ export async function runDoctorCommand(): Promise<void> {
   // ── External tools ───────────────────────────────────────────
   checks.push(checkCommand('git', 'git --version', 'needed for trace repo sync'));
   checks.push(checkCommand('gtr', 'git gtr version 2>/dev/null || gtr version', 'needed for v0.2 bash sandbox'));
+
+  // ── Subscription provider CLIs ───────────────────────────────
+  // If installed, the harness can use them via subprocess (claude-code/* and codex/*
+  // model strings) — this draws on your $200/mo Claude Max / ChatGPT Pro
+  // subscription quota instead of API tokens.
+  checks.push(
+    checkCommand('claude (Claude Code CLI)', 'claude --version', 'enables claude-code/* models — uses Claude Max subscription'),
+  );
+  checks.push(
+    checkCommand('codex (OpenAI Codex CLI)', 'codex --version', 'enables codex/* models — uses ChatGPT Pro subscription'),
+  );
 
   // ── Config file ──────────────────────────────────────────────
   try {

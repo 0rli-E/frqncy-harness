@@ -21,7 +21,9 @@ import {
   type Provider,
   type StreamEvent,
 } from './types.js';
-import { getProvider, computeCostUsd } from './providers/index.js';
+import { getProvider, computeCostUsd, parseModelString } from './providers/index.js';
+import { runSubscription } from './providers/subprocess.js';
+import { isSubscriptionProvider } from './types.js';
 import {
   appendTraceRecord,
   getTraceFilePath,
@@ -48,6 +50,22 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
   const traceDir = serializable.traceDir ?? DEFAULT_TRACE_DIR;
   const startedAt = new Date();
   const traceFile = getTraceFilePath(conversationId, startedAt, traceDir);
+
+  // ── Subscription provider lane (Claude Code / Codex subprocess) ──
+  const parsed = parseModelString(serializable.model);
+  if (isSubscriptionProvider(parsed.provider)) {
+    yield* streamSubscription({
+      conversationId,
+      traceDir,
+      traceFile,
+      startedAt,
+      input,
+      serializable,
+      provider: parsed.provider,
+      modelId: parsed.modelId,
+    });
+    return;
+  }
 
   const { model: languageModel, provider, modelId } = await getProvider(serializable.model);
 
@@ -364,4 +382,158 @@ function normalizeFinishReason(reason: string | undefined): ChatResult['finishRe
     default:
       return 'other';
   }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Subscription provider routing (claude-code, codex)
+// ────────────────────────────────────────────────────────────────────
+
+interface StreamSubscriptionArgs {
+  conversationId: string;
+  traceDir: string;
+  traceFile: string;
+  startedAt: Date;
+  input: ChatInput;
+  serializable: ChatInput;
+  provider: 'claude-code' | 'codex';
+  modelId: string;
+}
+
+async function* streamSubscription(args: StreamSubscriptionArgs): AsyncGenerator<StreamEvent, void, unknown> {
+  const { conversationId, traceDir, traceFile, startedAt, input, serializable, provider, modelId } = args;
+
+  // Subscription path doesn't support tools — refuse with a clean error if any are passed
+  if (input.tools && (input.tools as unknown[]).length > 0) {
+    const message =
+      `Tools are not supported with subscription provider '${provider}' — the official CLI does its own tooling. ` +
+      `Use an API provider (anthropic/*, openai/*, google/*, openrouter/*) for tool-using agents.`;
+    const err = Object.assign(new Error(message), { name: 'SubscriptionTools' });
+    await appendTraceRecord(traceFile, {
+      ts: new Date().toISOString(),
+      conversation_id: conversationId,
+      step: 0,
+      type: 'error',
+      content: { name: err.name, message },
+      model: serializable.model,
+      provider,
+    });
+    await recordConversationEnd({
+      conversationId,
+      startedAt,
+      endedAt: new Date(),
+      model: serializable.model,
+      messageCount: 0,
+      cumulativeUsage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 },
+      status: 'aborted_error',
+      traceDir,
+    });
+    yield { type: 'error', error: { name: err.name, message } };
+    throw err;
+  }
+
+  // Trace input messages
+  let step = 0;
+  for (const message of serializable.messages) {
+    if (message.role === 'user' || message.role === 'system') {
+      await appendTraceRecord(traceFile, {
+        ts: new Date().toISOString(),
+        conversation_id: conversationId,
+        step,
+        type: message.role === 'user' ? 'user' : 'system',
+        role: message.role,
+        content: message.content,
+      });
+      step++;
+    }
+  }
+
+  const callStartedAt = Date.now();
+  let assembledText = '';
+  let finalUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 };
+
+  try {
+    for await (const event of runSubscription({
+      provider,
+      modelId,
+      messages: serializable.messages,
+      ...(serializable.system !== undefined ? { system: serializable.system } : {}),
+      ...(input.sandboxPath !== undefined ? { cwd: input.sandboxPath } : {}),
+    })) {
+      if (event.type === 'text') {
+        assembledText += event.delta;
+        yield event;
+      } else if (event.type === 'usage') {
+        finalUsage = {
+          inputTokens: event.usage.inputTokens,
+          outputTokens: event.usage.outputTokens,
+          cachedInputTokens: event.usage.cachedInputTokens ?? 0,
+          costUsd: event.usage.costUsd ?? 0,
+        };
+        yield event;
+      } else if (event.type === 'error') {
+        yield event;
+      }
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    await appendTraceRecord(traceFile, {
+      ts: new Date().toISOString(),
+      conversation_id: conversationId,
+      step,
+      type: 'error',
+      content: { name: error.name, message: error.message },
+      model: serializable.model,
+      provider,
+      latency_ms: Date.now() - callStartedAt,
+    });
+    await recordConversationEnd({
+      conversationId,
+      startedAt,
+      endedAt: new Date(),
+      model: serializable.model,
+      messageCount: step,
+      cumulativeUsage: finalUsage,
+      status: 'aborted_error',
+      traceDir,
+    });
+    throw error;
+  }
+
+  const latencyMs = Date.now() - callStartedAt;
+
+  // Trace assistant response
+  await appendTraceRecord(traceFile, {
+    ts: new Date().toISOString(),
+    conversation_id: conversationId,
+    step,
+    type: 'assistant',
+    role: 'assistant',
+    content: assembledText,
+    model: serializable.model,
+    provider,
+    usage: finalUsage,
+    latency_ms: latencyMs,
+  });
+
+  await recordConversationEnd({
+    conversationId,
+    startedAt,
+    endedAt: new Date(),
+    model: serializable.model,
+    messageCount: step + 1,
+    cumulativeUsage: finalUsage,
+    status: 'completed',
+    traceDir,
+  });
+
+  const chatResult: ChatResult = {
+    text: assembledText,
+    conversationId,
+    usage: finalUsage,
+    model: serializable.model as ModelString,
+    provider: provider as Provider,
+    finishReason: 'stop',
+  };
+
+  yield { type: 'done', result: chatResult };
 }

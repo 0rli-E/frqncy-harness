@@ -9,11 +9,17 @@ export { stream } from './stream.js';
 
 export {
   TRACE_SCHEMA_VERSION,
+  PROVIDERS,
+  API_PROVIDERS,
+  SUBSCRIPTION_PROVIDERS,
+  isSubscriptionProvider,
   type ChatInput,
   type ChatResult,
   type Message,
   type ModelString,
   type Provider,
+  type ApiProvider,
+  type SubscriptionProvider,
   type Role,
   type StreamEvent,
   type TraceRecord,
@@ -33,6 +39,12 @@ export {
 } from './trace.js';
 
 export { parseModelString, getProvider } from './providers/index.js';
+export {
+  runSubscription,
+  isClaudeCodeAvailable,
+  isCodexAvailable,
+  type SubscriptionRunOptions,
+} from './providers/subprocess.js';
 
 export { computeCost, getModelRate, DEFAULT_RATES, type ModelRate } from './pricing.js';
 

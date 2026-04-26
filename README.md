@@ -142,12 +142,18 @@ frqncy-harness costs --period 7d             # spend summary
 - ✅ `auth` CLI subcommand (status/set/unset/path)
 - ✅ Hermes Agent skill packaging (`hermes-skill.md`)
 
-### v0.3.0-alpha.1 (this release)
+### v0.3.0-alpha.1 (shipped)
 - ✅ `web_search` tool — auto-detects `TAVILY_API_KEY` or `BRAVE_SEARCH_API_KEY`, normalizes results across providers
-- ⚠️ Anthropic OAuth — **NOT shipped**. Anthropic's 2026 *Authentication and credential use* policy prohibits using OAuth tokens from Free/Pro/Max accounts in third-party tools. Use API keys via `auth set anthropic <key>` or `ANTHROPIC_API_KEY=...`
-- ⏳ Inkified REPL — deferred to v0.4 (high friction vs. value tradeoff)
+- ⚠️ Anthropic OAuth — **NOT shipped**. Anthropic's 2026 *Authentication and credential use* policy prohibits using OAuth tokens from Free/Pro/Max accounts in third-party tools.
 
-### v0.4.0 (next, focused polish)
+### v0.4.0-alpha.1 (this release — subscription providers)
+- ✅ **`claude-code/*` provider** — subprocess-wraps the official `claude -p` CLI; uses your Claude Max subscription quota instead of API tokens. Permitted by Anthropic ToS (subprocess to official CLI ≠ OAuth token extraction).
+- ✅ **`codex/*` provider** — subprocess-wraps `codex exec`; uses your ChatGPT Pro subscription quota.
+- ✅ Doctor now detects both CLIs and reports installed/missing.
+- ✅ Tools NOT supported on subscription path (the official CLIs do their own internal tooling) — clean structured error if attempted.
+- ✅ Trace records mark `provider: 'claude-code' | 'codex'` and `costUsd: 0` (drawn from subscription quota, not API).
+
+### v0.4.0 (next)
 - ⏳ Inkified REPL + agent UI (richer streaming display, spinner, tool-call boxes)
 - ⏳ DSPy + GRPO Python sidecar for trace optimization (down-the-roads)
 - ⏳ MCP sampling support (let MCP servers request LLM calls back through the harness)

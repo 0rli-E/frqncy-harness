@@ -13,7 +13,7 @@
  *   most importantly Anthropic prompt caching.
  */
 import type { LanguageModel } from 'ai';
-import { ModelStringSchema, type ModelString, type Provider } from '../types.js';
+import { ModelStringSchema, PROVIDERS, type ModelString, type Provider } from '../types.js';
 
 export interface ProviderResult {
   model: LanguageModel;
@@ -36,17 +36,12 @@ export function parseModelString(model: ModelString): { provider: Provider; mode
   const providerStr = model.slice(0, slashIndex);
   const modelId = model.slice(slashIndex + 1);
 
-  if (
-    providerStr !== 'anthropic' &&
-    providerStr !== 'openai' &&
-    providerStr !== 'google' &&
-    providerStr !== 'openrouter'
-  ) {
+  if (!(PROVIDERS as readonly string[]).includes(providerStr)) {
     throw new Error(
-      `Unknown provider: ${providerStr}. Supported: anthropic, openai, google, openrouter.`,
+      `Unknown provider: ${providerStr}. Supported: ${PROVIDERS.join(', ')}.`,
     );
   }
-  return { provider: providerStr, modelId };
+  return { provider: providerStr as Provider, modelId };
 }
 
 /**
@@ -87,6 +82,13 @@ export async function getProvider(model: ModelString): Promise<ProviderResult> {
       });
       return { model: openrouter(modelId), provider, modelId };
     }
+    case 'claude-code':
+    case 'codex':
+      throw new Error(
+        `Provider '${provider}' is a subscription provider — it doesn't return an AI SDK LanguageModel. ` +
+          `Subscription providers run via subprocess (src/providers/subprocess.ts) and are routed separately ` +
+          `inside stream()/chat(). If you reached this code path, it's a bug — getProvider() should not have been called.`,
+      );
   }
 }
 
