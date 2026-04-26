@@ -81,7 +81,7 @@ export async function getProvider(model: ModelString): Promise<ProviderResult> {
         baseURL: 'https://openrouter.ai/api/v1',
         headers: {
           Authorization: `Bearer ${apiKey}`,
-          'HTTP-Referer': 'https://github.com/0xOrli/frqncy-harness',
+          'HTTP-Referer': 'https://github.com/0rli-E/frqncy-harness',
           'X-Title': '@frqncy/harness',
         },
       });

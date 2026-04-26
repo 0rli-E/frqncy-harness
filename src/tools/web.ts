@@ -49,7 +49,7 @@ export const webFetchTool: HarnessTool<WebFetchInput, WebFetchOutput> = {
       const res = await fetch(url, {
         method: method ?? 'GET',
         headers: {
-          'User-Agent': '@frqncy/harness/0.2 (https://github.com/0xOrli/frqncy-harness)',
+          'User-Agent': '@frqncy/harness/0.2 (https://github.com/0rli-E/frqncy-harness)',
           ...headers,
         },
         signal: controller.signal,

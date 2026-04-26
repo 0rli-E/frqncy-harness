@@ -55,12 +55,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/0xOrli/frqncy-harness.git"
+    "url": "git+https://github.com/0rli-E/frqncy-harness.git"
   },
   "bugs": {
-    "url": "https://github.com/0xOrli/frqncy-harness/issues"
+    "url": "https://github.com/0rli-E/frqncy-harness/issues"
   },
-  "homepage": "https://github.com/0xOrli/frqncy-harness#readme",
+  "homepage": "https://github.com/0rli-E/frqncy-harness#readme",
   "dependencies": {
     "ai": "^6.0.0",
     "@ai-sdk/anthropic": "^3.0.0",

@@ -68,7 +68,7 @@ Examples:
   frqncy-harness config set costCap.softWarnUsd 10
   frqncy-harness costs --period 30d
 
-Docs: https://github.com/0xOrli/frqncy-harness#readme
+Docs: https://github.com/0rli-E/frqncy-harness#readme
 `;
 
 const VERSION = '0.3.0-alpha.1';
