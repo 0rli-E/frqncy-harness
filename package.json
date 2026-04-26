@@ -1,0 +1,79 @@
+{
+  "name": "@frqncy/harness",
+  "version": "0.3.0-alpha.1",
+  "description": "A plug-and-play LLM harness — provider-indifferent, trace-first, never compacted.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./providers": {
+      "types": "./dist/providers/index.d.ts",
+      "import": "./dist/providers/index.js"
+    },
+    "./trace": {
+      "types": "./dist/trace.d.ts",
+      "import": "./dist/trace.js"
+    }
+  },
+  "bin": {
+    "frqncy-harness": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "AGENT.md",
+    "LICENSE",
+    "hermes-skill.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "llm",
+    "ai",
+    "agent",
+    "harness",
+    "claude",
+    "openai",
+    "openrouter",
+    "vercel-ai-sdk",
+    "frqncy"
+  ],
+  "author": "Orlando Eisenreich <orlando.eisenreich@gmail.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0xOrli/frqncy-harness.git"
+  },
+  "bugs": {
+    "url": "https://github.com/0xOrli/frqncy-harness/issues"
+  },
+  "homepage": "https://github.com/0xOrli/frqncy-harness#readme",
+  "dependencies": {
+    "ai": "^6.0.0",
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/openai": "^3.0.0",
+    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/openai-compatible": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.4.0"
+  }
+}
