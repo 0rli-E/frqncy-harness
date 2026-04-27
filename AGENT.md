@@ -59,16 +59,39 @@ The decision trace JSONL is the moat. Treat it as append-only, never modify past
 
 ## Building from this scaffold
 
-The current state (v0.0.1) is the minimum viable harness: provider abstraction, `chat()`, `stream()`, trace writer. The next things to build, in order:
+**Current state: v0.4.0-alpha.1 (shipped 2026-04-26).** 112 tests passing, fully working end-to-end.
 
-1. Tool calling (Zod-typed tool definitions, AI SDK integration)
-2. Bundled `bash` tool with gtr worktree sandbox
-3. File primitives (`read`, `write`, `grep`, `glob`)
-4. Web tools (`web_fetch`, `web_search`)
-5. MCP client (Claude Desktop config-compatible, `_harness` extensions)
-6. CLI: `chat`, `repl`, `agent`, `costs`, `doctor`, `config`, `mcp`, `sync`
-7. External-artifacts pattern (`init.sh`, `progress.md`, `tasks.json`)
-8. Lethal-trifecta gate
-9. Cost cap enforcement
-10. Anthropic OAuth (Claude Max)
-11. Hermes Agent skill packaging
+What's built:
+- Six provider lanes: anthropic, openai, google, openrouter (API path with full feature support — tools, prompt caching) + claude-code, codex (subscription subprocess path — uses Max/Pro quota, no tools)
+- Tools: bash (with gtr/tempdir sandbox), read/write/grep/glob, web_fetch, web_search (Tavily/Brave dual-provider)
+- MCP client (Claude Desktop schema-compatible mcp.json + `_harness` extensions)
+- CLI: chat, repl, agent, doctor, config, costs, mcp, auth
+- External-artifacts pattern in agent mode (init.sh + progress.md + tasks.json + git baseline)
+- Cost guardrails (default $5 soft warn / $25 hard abort, configurable)
+- Lethal-trifecta gate (warn by default, configurable to block)
+- Trace storage: `~/.frqncy-harness/traces/<date>/<id>.jsonl` + `INDEX.jsonl`, append-only never-compacted, mirrored to private `github.com/0rli-E/frqncy-harness-traces`
+- Hermes Agent skill packaging (`hermes-skill.md`) for daemon deployment
+- Auth scaffolding (~/.frqncy-harness/auth/keys.json mode 0600); supports anthropic, openai, google, openrouter, tavily, brave
+
+What's deferred (the "down the roads" — see `/Users/orli/Documents/Claude/Projects/FRQNCY WEBSITE/proposals/HARNESS-PLAN.md`):
+
+1. **Anthropic OAuth via Claude Max** — REVOKED. Anthropic's 2026 ToS prohibits OAuth tokens from consumer subscriptions in third-party tools. Workaround already shipped: subprocess wrap `claude -p` (the `claude-code/*` provider lane). API key is the only legitimate direct-API path.
+2. Inkified REPL — high friction vs value; deferred indefinitely
+3. Thread/project tagging on traces — v0.5
+4. Auto-load AGENT.md/CLAUDE.md in chat/repl too (currently only agent mode reads them) — v0.5
+5. Auto-push traces (the `autoPushTraces` config flag exists but isn't wired) — v0.5
+6. Bi-temporal memory (Graphiti/Zep) — v2+
+7. DSPy + GRPO Python sidecar for trace optimization — v2+
+8. Voyager-style auto-skill library — v3
+9. AG-UI Protocol surface for the FRQNCY Capacitor app — v3
+
+Companion repo: `/Users/orli/Documents/Claude/Projects/FRQNCY WEBSITE/` — the FRQNCY content + planning docs. Read its top-level `CLAUDE.md` for FRQNCY-specific context (editorial values, content schemas, etc.). The FRQNCY content MCP server (`mcp-servers/frqncy-content/` in that repo) is wired in by default — the harness can already query 146 topics + 766 resources as tools.
+
+## Recommended next sprints
+
+In priority order:
+
+1. **Thread tagging (v0.5)** — add `thread_id` + `project_id` to trace schema; CLI commands to manage threads. Turns the flat trace into the proto-context-graph. ~1.5 hours, ~400 LOC.
+2. **AGENT.md auto-load in chat/repl** — small UX win, ~30 min, ~50 LOC.
+3. **Auto-push traces** — wire the `autoPushTraces` flag to actually push. ~30 min, ~80 LOC.
+4. **Inkified REPL** — visual polish. Deferred indefinitely; only do if asked.
