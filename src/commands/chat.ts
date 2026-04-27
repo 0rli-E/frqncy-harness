@@ -3,6 +3,7 @@
  */
 import { stream } from '../stream.js';
 import { loadConfig } from '../config.js';
+import { loadProjectInstructions } from '../instructions.js';
 import type { ModelString, Usage } from '../types.js';
 
 export interface ChatCommandOptions {
@@ -24,11 +25,24 @@ export async function runChatCommand(prompt: string, options: ChatCommandOptions
   let conversationId = options.resume;
   let finalUsage: Usage | undefined;
 
+  // Auto-load AGENT.md / CLAUDE.md as the system prompt when --system isn't given.
+  // Resuming a conversation skips this — system already lives in the trace.
+  let systemPrompt = options.system;
+  if (!systemPrompt && !options.resume) {
+    const loaded = await loadProjectInstructions(process.cwd());
+    if (loaded) {
+      systemPrompt = loaded.content;
+      if (!options.json) {
+        process.stderr.write(`[loaded ${loaded.source}]\n`);
+      }
+    }
+  }
+
   // Errors thrown by stream() bubble up to the cli.ts catch which formats them via formatError().
   for await (const event of stream({
     model,
     messages: [{ role: 'user', content: prompt }],
-    ...(options.system ? { system: options.system } : {}),
+    ...(systemPrompt ? { system: systemPrompt } : {}),
     ...(options.resume ? { conversationId: options.resume } : {}),
   })) {
     switch (event.type) {

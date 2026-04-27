@@ -25,6 +25,7 @@ import { webSearchTool } from '../tools/web-search.js';
 import { loadMcpConfig, getEnabledServers } from '../mcp/config.js';
 import { connectMcpServers } from '../mcp/client.js';
 import { flattenMcpToolset } from '../mcp/tool-adapter.js';
+import { loadProjectInstructions } from '../instructions.js';
 import type { ApprovalRequest } from '../approval.js';
 import type { HarnessTool } from '../tools/index.js';
 import type { ModelString } from '../types.js';
@@ -285,20 +286,7 @@ ${prompt}
 // ────────────────────────────────────────────────────────────────────
 
 async function loadSystemPrompt(originalCwd: string, prompt: string, sandboxPath: string): Promise<string> {
-  const candidates = [
-    join(originalCwd, 'AGENT.md'),
-    join(originalCwd, 'CLAUDE.md'),
-  ];
-  let projectInstructions = '';
-  for (const path of candidates) {
-    try {
-      const contents = await fs.readFile(path, 'utf-8');
-      projectInstructions = contents;
-      break;
-    } catch {
-      continue;
-    }
-  }
+  const loaded = await loadProjectInstructions(originalCwd);
 
   const baseSystem =
     `You are an agent running inside the @frqncy-network/harness CLI. ` +
@@ -308,8 +296,8 @@ async function loadSystemPrompt(originalCwd: string, prompt: string, sandboxPath
     `and update tasks.json when you complete a discrete step. ` +
     `When the task is complete, write a final summary to progress.md and stop.`;
 
-  if (projectInstructions) {
-    return `${baseSystem}\n\n--- PROJECT INSTRUCTIONS (from AGENT.md or CLAUDE.md) ---\n\n${projectInstructions}`;
+  if (loaded) {
+    return `${baseSystem}\n\n--- PROJECT INSTRUCTIONS (from ${loaded.source}) ---\n\n${loaded.content}`;
   }
   return baseSystem;
 }

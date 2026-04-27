@@ -78,8 +78,7 @@ What's deferred (the "down the roads" — see `/Users/orli/Documents/Claude/Proj
 1. **Anthropic OAuth via Claude Max** — REVOKED. Anthropic's 2026 ToS prohibits OAuth tokens from consumer subscriptions in third-party tools. Workaround already shipped: subprocess wrap `claude -p` (the `claude-code/*` provider lane). API key is the only legitimate direct-API path.
 2. Inkified REPL — high friction vs value; deferred indefinitely
 3. Thread/project tagging on traces — v0.5
-4. Auto-load AGENT.md/CLAUDE.md in chat/repl too (currently only agent mode reads them) — v0.5
-5. Auto-push traces (the `autoPushTraces` config flag exists but isn't wired) — v0.5
+4. Auto-push traces (the `autoPushTraces` config flag exists but isn't wired) — v0.5
 6. Bi-temporal memory (Graphiti/Zep) — v2+
 7. DSPy + GRPO Python sidecar for trace optimization — v2+
 8. Voyager-style auto-skill library — v3
@@ -92,6 +91,5 @@ Companion repo: `/Users/orli/Documents/Claude/Projects/FRQNCY WEBSITE/` — the 
 In priority order:
 
 1. **Thread tagging (v0.5)** — add `thread_id` + `project_id` to trace schema; CLI commands to manage threads. Turns the flat trace into the proto-context-graph. ~1.5 hours, ~400 LOC.
-2. **AGENT.md auto-load in chat/repl** — small UX win, ~30 min, ~50 LOC.
-3. **Auto-push traces** — wire the `autoPushTraces` flag to actually push. ~30 min, ~80 LOC.
-4. **Inkified REPL** — visual polish. Deferred indefinitely; only do if asked.
+2. **Auto-push traces** — wire the `autoPushTraces` flag to actually push. ~30 min, ~80 LOC.
+3. **Inkified REPL** — visual polish. Deferred indefinitely; only do if asked.

@@ -15,6 +15,7 @@ import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { stream } from '../stream.js';
 import { loadConfig } from '../config.js';
+import { loadProjectInstructions } from '../instructions.js';
 import type { Message, ModelString, Usage } from '../types.js';
 
 const ANSI = {
@@ -38,8 +39,19 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
   const config = await loadConfig();
   let currentModel = (options.model ?? config.defaultModel) as ModelString;
   let currentSystem = options.system;
+  let systemSource: string | undefined;
   let conversationId: string | undefined = options.resume;
   let messages: Message[] = [];
+
+  // Auto-load AGENT.md / CLAUDE.md as initial system prompt when none provided
+  // and we're not resuming a saved conversation.
+  if (!currentSystem && !conversationId) {
+    const loaded = await loadProjectInstructions(process.cwd());
+    if (loaded) {
+      currentSystem = loaded.content;
+      systemSource = loaded.source;
+    }
+  }
 
   const rl = createInterface({ input, output });
 
@@ -49,7 +61,8 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
   );
   output.write(`${ANSI.dim}model: ${currentModel}${ANSI.reset}\n`);
   if (currentSystem) {
-    output.write(`${ANSI.dim}system: ${currentSystem.slice(0, 60)}${currentSystem.length > 60 ? '...' : ''}${ANSI.reset}\n`);
+    const label = systemSource ? `system (${systemSource})` : 'system';
+    output.write(`${ANSI.dim}${label}: ${currentSystem.slice(0, 60)}${currentSystem.length > 60 ? '...' : ''}${ANSI.reset}\n`);
   }
   if (conversationId) {
     output.write(`${ANSI.dim}resuming: ${conversationId}${ANSI.reset}\n`);
@@ -114,7 +127,8 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
           continue;
         case 'system':
           currentSystem = arg || undefined;
-          output.write(`${ANSI.green}system prompt set${ANSI.reset}\n\n`);
+          systemSource = undefined;
+          output.write(`${ANSI.green}system prompt ${arg ? 'set' : 'cleared'}${ANSI.reset}\n\n`);
           continue;
         default:
           output.write(`${ANSI.red}unknown command: /${cmd}${ANSI.reset} (try /help)\n\n`);
