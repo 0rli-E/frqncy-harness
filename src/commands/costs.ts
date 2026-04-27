@@ -8,13 +8,19 @@ import { getIndexFilePath, DEFAULT_TRACE_DIR } from '../trace.js';
 export interface CostsCommandOptions {
   period?: string;  // e.g., "7d", "30d", "1y", "all"
   json?: boolean;
+  threadId?: string;
+  projectId?: string;
+  byThread?: boolean;
+  byProject?: boolean;
+  /** Override the trace dir (test hook; CLI always uses DEFAULT_TRACE_DIR). */
+  traceDir?: string;
 }
 
 export async function runCostsCommand(options: CostsCommandOptions): Promise<void> {
   const periodMs = parsePeriod(options.period ?? '7d');
   const cutoffMs = Date.now() - periodMs;
 
-  const indexPath = getIndexFilePath(DEFAULT_TRACE_DIR);
+  const indexPath = getIndexFilePath(options.traceDir ?? DEFAULT_TRACE_DIR);
   let raw: string;
   try {
     raw = await fs.readFile(indexPath, 'utf-8');
@@ -39,7 +45,12 @@ export async function runCostsCommand(options: CostsCommandOptions): Promise<voi
     }
   }
 
-  const inWindow = records.filter((r) => Date.parse(r.started_at) >= cutoffMs);
+  const inWindow = records.filter((r) => {
+    if (Date.parse(r.started_at) < cutoffMs) return false;
+    if (options.threadId && r.thread_id !== options.threadId) return false;
+    if (options.projectId && r.project_id !== options.projectId) return false;
+    return true;
+  });
 
   const totals = {
     conversations: inWindow.length,
@@ -49,7 +60,19 @@ export async function runCostsCommand(options: CostsCommandOptions): Promise<voi
     totalCachedInputTokens: 0,
   };
 
-  const byModel = new Map<string, { conversations: number; costUsd: number; inputTokens: number; outputTokens: number; cachedInputTokens: number }>();
+  type Bucket = { conversations: number; costUsd: number; inputTokens: number; outputTokens: number; cachedInputTokens: number };
+  const empty = (): Bucket => ({ conversations: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 });
+  const accumulate = (b: Bucket, r: IndexRecord): void => {
+    b.conversations++;
+    b.costUsd += r.total_cost_usd;
+    b.inputTokens += r.total_input_tokens;
+    b.outputTokens += r.total_output_tokens;
+    b.cachedInputTokens += r.total_cached_input_tokens;
+  };
+
+  const byModel = new Map<string, Bucket>();
+  const byThread = new Map<string, Bucket>();
+  const byProject = new Map<string, Bucket>();
   const byStatus = new Map<string, number>();
 
   for (const r of inWindow) {
@@ -58,13 +81,19 @@ export async function runCostsCommand(options: CostsCommandOptions): Promise<voi
     totals.totalOutputTokens += r.total_output_tokens;
     totals.totalCachedInputTokens += r.total_cached_input_tokens;
 
-    const m = byModel.get(r.model) ?? { conversations: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
-    m.conversations++;
-    m.costUsd += r.total_cost_usd;
-    m.inputTokens += r.total_input_tokens;
-    m.outputTokens += r.total_output_tokens;
-    m.cachedInputTokens += r.total_cached_input_tokens;
+    const m = byModel.get(r.model) ?? empty();
+    accumulate(m, r);
     byModel.set(r.model, m);
+
+    const threadKey = r.thread_id ?? '(untagged)';
+    const t = byThread.get(threadKey) ?? empty();
+    accumulate(t, r);
+    byThread.set(threadKey, t);
+
+    const projectKey = r.project_id ?? '(untagged)';
+    const p = byProject.get(projectKey) ?? empty();
+    accumulate(p, r);
+    byProject.set(projectKey, p);
 
     byStatus.set(r.status, (byStatus.get(r.status) ?? 0) + 1);
   }
@@ -74,8 +103,14 @@ export async function runCostsCommand(options: CostsCommandOptions): Promise<voi
       JSON.stringify(
         {
           period: options.period ?? '7d',
+          filter: {
+            ...(options.threadId ? { threadId: options.threadId } : {}),
+            ...(options.projectId ? { projectId: options.projectId } : {}),
+          },
           ...totals,
           byModel: Object.fromEntries(byModel),
+          byThread: Object.fromEntries(byThread),
+          byProject: Object.fromEntries(byProject),
           byStatus: Object.fromEntries(byStatus),
         },
         null,
@@ -87,7 +122,14 @@ export async function runCostsCommand(options: CostsCommandOptions): Promise<voi
 
   // Pretty print
   const ANSI = { bold: '\x1b[1m', dim: '\x1b[2m', cyan: '\x1b[36m', green: '\x1b[32m', reset: '\x1b[0m' };
-  process.stdout.write(`\n${ANSI.bold}${ANSI.cyan}@frqncy-network/harness costs${ANSI.reset} ${ANSI.dim}(last ${options.period ?? '7d'})${ANSI.reset}\n\n`);
+  const filterLabel = [
+    options.threadId ? `thread=${options.threadId}` : '',
+    options.projectId ? `project=${options.projectId}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const filterSuffix = filterLabel ? ` ${ANSI.dim}[${filterLabel}]${ANSI.reset}` : '';
+  process.stdout.write(`\n${ANSI.bold}${ANSI.cyan}@frqncy-network/harness costs${ANSI.reset} ${ANSI.dim}(last ${options.period ?? '7d'})${ANSI.reset}${filterSuffix}\n\n`);
   process.stdout.write(`  Conversations:  ${totals.conversations}\n`);
   process.stdout.write(`  Input tokens:   ${totals.totalInputTokens.toLocaleString()}\n`);
   process.stdout.write(`  Output tokens:  ${totals.totalOutputTokens.toLocaleString()}\n`);
@@ -100,6 +142,28 @@ export async function runCostsCommand(options: CostsCommandOptions): Promise<voi
     for (const [model, m] of sorted) {
       process.stdout.write(
         `    ${model.padEnd(48)} ${m.conversations.toString().padStart(4)} convs  $${m.costUsd.toFixed(4).padStart(10)}\n`,
+      );
+    }
+    process.stdout.write('\n');
+  }
+
+  if (options.byThread && byThread.size > 0) {
+    process.stdout.write(`  ${ANSI.dim}By thread:${ANSI.reset}\n`);
+    const sorted = [...byThread.entries()].sort((a, b) => b[1].costUsd - a[1].costUsd);
+    for (const [thread, t] of sorted) {
+      process.stdout.write(
+        `    ${thread.padEnd(48)} ${t.conversations.toString().padStart(4)} convs  $${t.costUsd.toFixed(4).padStart(10)}\n`,
+      );
+    }
+    process.stdout.write('\n');
+  }
+
+  if (options.byProject && byProject.size > 0) {
+    process.stdout.write(`  ${ANSI.dim}By project:${ANSI.reset}\n`);
+    const sorted = [...byProject.entries()].sort((a, b) => b[1].costUsd - a[1].costUsd);
+    for (const [project, p] of sorted) {
+      process.stdout.write(
+        `    ${project.padEnd(48)} ${p.conversations.toString().padStart(4)} convs  $${p.costUsd.toFixed(4).padStart(10)}\n`,
       );
     }
     process.stdout.write('\n');

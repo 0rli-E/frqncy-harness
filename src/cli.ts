@@ -21,6 +21,7 @@ import { runAgentCommand } from './commands/agent.js';
 import { runMcpCommand, type McpSubcommand } from './commands/mcp.js';
 import { runAuthCommand, type AuthSubcommand } from './commands/auth.js';
 import { runThreadCommand, type ThreadSubcommand } from './commands/thread.js';
+import { runTracesCommand, type TracesSubcommand } from './commands/traces.js';
 import { hydrateApiKeysIntoEnv } from './auth/index.js';
 
 const HELP = `
@@ -40,7 +41,11 @@ Commands:
   doctor                   Health check (Node, API keys, trace dir, gtr, git)
   config <subcmd> [args]   list | get <path> | set <path> <value> | unset <path> | path
   costs [--period 7d]      Summarize spend over last period (e.g. 7d, 4w, 3m, all)
-                           Options: --json
+                           Options: --json, --thread <id>, --project <id>,
+                                    --by-thread, --by-project
+  traces <subcmd> [args]   list [--thread <id>] [--project <id>] [--since 7d] [--limit 20]
+                           | show <conversation-id> | latest | path
+                           Options: --json (on list / show / latest)
   mcp <subcmd> [args]      list | add <name> <command> [args...] | remove <name>
                            | enable <name> | disable <name> | path
                            | import-from-claude-desktop | test [<name>]
@@ -210,8 +215,20 @@ async function main(): Promise<void> {
         await runCostsCommand({
           ...(flagString(flags, 'period') ? { period: flagString(flags, 'period')! } : {}),
           json: flagBool(flags, 'json'),
+          ...(flagString(flags, 'thread') ? { threadId: flagString(flags, 'thread')! } : {}),
+          ...(flagString(flags, 'project') ? { projectId: flagString(flags, 'project')! } : {}),
+          byThread: flagBool(flags, 'by-thread'),
+          byProject: flagBool(flags, 'by-project'),
         });
         break;
+      case 'traces': {
+        const sub = positional[0] as TracesSubcommand | undefined;
+        if (!sub) {
+          throw new Error('Usage: frqncy-harness traces <list|show|latest|path> [args]');
+        }
+        await runTracesCommand(sub, positional.slice(1));
+        break;
+      }
       case 'mcp': {
         const sub = positional[0] as McpSubcommand | undefined;
         if (!sub) {
