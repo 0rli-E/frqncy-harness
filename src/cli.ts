@@ -20,6 +20,7 @@ import { runCostsCommand } from './commands/costs.js';
 import { runAgentCommand } from './commands/agent.js';
 import { runMcpCommand, type McpSubcommand } from './commands/mcp.js';
 import { runAuthCommand, type AuthSubcommand } from './commands/auth.js';
+import { runThreadCommand, type ThreadSubcommand } from './commands/thread.js';
 import { hydrateApiKeysIntoEnv } from './auth/index.js';
 
 const HELP = `
@@ -46,6 +47,10 @@ Commands:
   auth <subcmd> [args]     status | set <provider> <key> | unset <provider> | path
                            (OAuth login is NOT available — Anthropic/OpenAI ToS forbids
                             consumer-subscription OAuth tokens in third-party tools)
+  thread <subcmd> [args]   list | current | new <id> [--label '...'] [--project <id>]
+                           | use <id> | none | rename <old> <new> | delete <id> | path
+                           (Tags every conversation's trace + index with thread/project ids;
+                            chat/repl/agent take --thread <id> to override the active thread)
 
 Global:
   --version, -v            Print version
@@ -60,6 +65,7 @@ Model strings (API path — pay per token, full feature support):
   google/gemini-2.5-pro
   google/gemini-2.5-flash
   openrouter/<provider>/<model>   (e.g. openrouter/nousresearch/hermes-4-405b)
+  chutes/<provider>/<model>       (decentralized inference, set CHUTES_API_KEY; e.g. chutes/deepseek-ai/deepseek-r1)
 
 Model strings (subscription path — uses your Max/Pro quota; no tools, limited streaming):
   claude-code/sonnet              (requires "claude" CLI installed; uses Claude Max)
@@ -81,7 +87,7 @@ Examples:
 Docs: https://github.com/0rli-E/frqncy-harness#readme
 `;
 
-const VERSION = '0.4.0-alpha.1';
+const VERSION = '0.6.0-alpha.1';
 
 interface ParsedArgs {
   command?: string;
@@ -159,6 +165,8 @@ async function main(): Promise<void> {
           ...(flagString(flags, 'model') ? { model: flagString(flags, 'model')! } : {}),
           ...(flagString(flags, 'system') ? { system: flagString(flags, 'system')! } : {}),
           ...(flagString(flags, 'resume') ? { resume: flagString(flags, 'resume')! } : {}),
+          ...(flagString(flags, 'thread') ? { threadId: flagString(flags, 'thread')! } : {}),
+          ...(flagString(flags, 'project') ? { projectId: flagString(flags, 'project')! } : {}),
           json: flagBool(flags, 'json'),
         });
         break;
@@ -168,6 +176,8 @@ async function main(): Promise<void> {
           ...(flagString(flags, 'model') ? { model: flagString(flags, 'model')! } : {}),
           ...(flagString(flags, 'system') ? { system: flagString(flags, 'system')! } : {}),
           ...(flagString(flags, 'resume') ? { resume: flagString(flags, 'resume')! } : {}),
+          ...(flagString(flags, 'thread') ? { threadId: flagString(flags, 'thread')! } : {}),
+          ...(flagString(flags, 'project') ? { projectId: flagString(flags, 'project')! } : {}),
         });
         break;
       }
@@ -180,6 +190,8 @@ async function main(): Promise<void> {
           ...(maxStepsStr ? { maxSteps: Number(maxStepsStr) } : {}),
           noSandbox: flagBool(flags, 'no-sandbox'),
           noArtifacts: flagBool(flags, 'no-artifacts'),
+          ...(flagString(flags, 'thread') ? { threadId: flagString(flags, 'thread')! } : {}),
+          ...(flagString(flags, 'project') ? { projectId: flagString(flags, 'project')! } : {}),
         });
         break;
       }
@@ -216,6 +228,16 @@ async function main(): Promise<void> {
           throw new Error('Usage: frqncy-harness auth <status|set|unset|path|login|logout> [args]');
         }
         await runAuthCommand(sub, positional.slice(1));
+        break;
+      }
+      case 'thread': {
+        const sub = positional[0] as ThreadSubcommand | undefined;
+        if (!sub) {
+          throw new Error(
+            'Usage: frqncy-harness thread <list|current|new|use|none|rename|delete|path> [args]',
+          );
+        }
+        await runThreadCommand(sub, positional.slice(1));
         break;
       }
       default:

@@ -50,6 +50,8 @@ export interface AgentCommandOptions {
   maxSteps?: number;
   noSandbox?: boolean;
   noArtifacts?: boolean;
+  threadId?: string;
+  projectId?: string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -151,6 +153,10 @@ export async function runAgentCommand(prompt: string, options: AgentCommandOptio
       yolo: options.yolo === true,
       costCap: { softWarnUsd: config.costCap.softWarnUsd, hardAbortUsd: config.costCap.hardAbortUsd },
       trifectaSeverity: 'warn',
+      ...(config.hooks !== undefined ? { hooksConfig: config.hooks } : {}),
+      ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(options.projectId ? { projectId: options.projectId } : {}),
+      useDefaultHooks: true,
     })) {
       switch (event.type) {
         case 'text':

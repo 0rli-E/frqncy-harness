@@ -57,6 +57,7 @@ export async function runDoctorCommand(): Promise<void> {
     { name: 'OPENAI_API_KEY', envVar: 'OPENAI_API_KEY' },
     { name: 'GOOGLE_GENERATIVE_AI_API_KEY', envVar: 'GOOGLE_GENERATIVE_AI_API_KEY' },
     { name: 'OPENROUTER_API_KEY', envVar: 'OPENROUTER_API_KEY' },
+    { name: 'CHUTES_API_KEY (DeAI lane)', envVar: 'CHUTES_API_KEY' },
     { name: 'TAVILY_API_KEY (web_search)', envVar: 'TAVILY_API_KEY' },
     { name: 'BRAVE_SEARCH_API_KEY (web_search)', envVar: 'BRAVE_SEARCH_API_KEY' },
   ];
@@ -99,6 +100,34 @@ export async function runDoctorCommand(): Promise<void> {
       status: 'fail',
       message: `malformed: ${err instanceof Error ? err.message : String(err)}`,
     });
+  }
+
+  // ── Hooks (v0.5+) ────────────────────────────────────────────
+  try {
+    const config = await loadConfig();
+    if (config.hooks === undefined) {
+      checks.push({
+        name: 'Hooks',
+        status: 'ok',
+        message: 'using defaults: post-agent → auto-commit-traces + macos-notification',
+      });
+    } else {
+      const counts = {
+        'pre-agent': config.hooks['pre-agent']?.length ?? 0,
+        'post-tool-use': config.hooks['post-tool-use']?.length ?? 0,
+        'post-agent': config.hooks['post-agent']?.length ?? 0,
+      };
+      const total = counts['pre-agent'] + counts['post-tool-use'] + counts['post-agent'];
+      checks.push({
+        name: 'Hooks',
+        status: total > 0 ? 'ok' : 'info',
+        message: total > 0
+          ? `pre=${counts['pre-agent']} post-tool=${counts['post-tool-use']} post-agent=${counts['post-agent']}`
+          : 'configured but empty (no hooks will fire)',
+      });
+    }
+  } catch {
+    // Config malformed — already reported above
   }
 
   // ── Trace directory writable ─────────────────────────────────

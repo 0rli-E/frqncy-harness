@@ -20,6 +20,8 @@ import {
   recordConversationEnd,
   DEFAULT_TRACE_DIR,
 } from './trace.js';
+import { resolveTags, touchActiveThread } from './threads.js';
+import type { TraceRecord } from './types.js';
 
 export async function chat(input: ChatInput): Promise<ChatResult> {
   // Validate input — refuse to proceed with bad arguments
@@ -30,6 +32,25 @@ export async function chat(input: ChatInput): Promise<ChatResult> {
   const startedAt = new Date();
   const traceFile = getTraceFilePath(conversationId, startedAt, traceDir);
 
+  // ── Thread + project tagging (v0.5) ────────────────────────
+  const tags = await resolveTags({
+    threadId: parsed.threadId,
+    projectId: parsed.projectId,
+  });
+  await touchActiveThread();
+  const traceTagFields = {
+    ...(tags.threadId ? { thread_id: tags.threadId } : {}),
+    ...(tags.projectId ? { project_id: tags.projectId } : {}),
+  };
+  const trace = (rec: Omit<TraceRecord, 'schema_version'>) =>
+    appendTraceRecord(traceFile, { ...rec, ...traceTagFields });
+  const endConv = (rcArgs: Omit<Parameters<typeof recordConversationEnd>[0], 'threadId' | 'projectId'>) =>
+    recordConversationEnd({
+      ...rcArgs,
+      ...(tags.threadId ? { threadId: tags.threadId } : {}),
+      ...(tags.projectId ? { projectId: tags.projectId } : {}),
+    });
+
   // Resolve the provider
   const { model: languageModel, provider, modelId } = await getProvider(parsed.model);
 
@@ -37,7 +58,7 @@ export async function chat(input: ChatInput): Promise<ChatResult> {
   let step = 0;
   for (const message of parsed.messages) {
     if (message.role === 'user' || message.role === 'system') {
-      await appendTraceRecord(traceFile, {
+      await trace({
         ts: new Date().toISOString(),
         conversation_id: conversationId,
         step,
@@ -64,7 +85,7 @@ export async function chat(input: ChatInput): Promise<ChatResult> {
   } catch (err) {
     errorOccurred = err instanceof Error ? err : new Error(String(err));
     // Record the error in the trace before re-throwing
-    await appendTraceRecord(traceFile, {
+    await trace({
       ts: new Date().toISOString(),
       conversation_id: conversationId,
       step,
@@ -74,7 +95,7 @@ export async function chat(input: ChatInput): Promise<ChatResult> {
       provider,
       latency_ms: Date.now() - callStartedAt,
     });
-    await recordConversationEnd({
+    await endConv({
       conversationId,
       startedAt,
       endedAt: new Date(),
@@ -114,7 +135,7 @@ export async function chat(input: ChatInput): Promise<ChatResult> {
   };
 
   // Record the assistant response in the trace
-  await appendTraceRecord(traceFile, {
+  await trace({
     ts: new Date().toISOString(),
     conversation_id: conversationId,
     step,
@@ -128,7 +149,7 @@ export async function chat(input: ChatInput): Promise<ChatResult> {
   });
 
   // Write conversation-end summary to INDEX.jsonl
-  await recordConversationEnd({
+  await endConv({
     conversationId,
     startedAt,
     endedAt: new Date(),

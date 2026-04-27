@@ -82,6 +82,22 @@ export async function getProvider(model: ModelString): Promise<ProviderResult> {
       });
       return { model: openrouter(modelId), provider, modelId };
     }
+    case 'chutes': {
+      // Chutes is OpenAI-compatible at https://chutes.ai/v1 — decentralized inference (Bittensor).
+      const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
+      const apiKey = process.env['CHUTES_API_KEY'];
+      if (!apiKey) {
+        throw new Error('CHUTES_API_KEY environment variable is required for Chutes models.');
+      }
+      const chutes = createOpenAICompatible({
+        name: 'chutes',
+        baseURL: 'https://chutes.ai/v1',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+      });
+      return { model: chutes(modelId), provider, modelId };
+    }
     case 'claude-code':
     case 'codex':
       throw new Error(

@@ -1,0 +1,356 @@
+/**
+ * Hooks primitive — fire user-defined functions at agent lifecycle points.
+ *
+ * Inspired by Claude Code's hooks system. Three lifecycle events in v0.5:
+ *
+ *   pre-agent     — fires once before the agent loop starts (only if tools are present)
+ *   post-tool-use — fires after each tool call returns (with input + output)
+ *   post-agent    — fires once after the agent loop completes (success or error)
+ *
+ * A hook entry can be:
+ *   - A shell command string: harness pipes JSON context via stdin, captures stdout
+ *   - A path to a .js or .ts file: harness dynamically imports and calls the default export
+ *   - A bundled hook reference like "frqncy-harness-bundled:auto-commit-traces"
+ *
+ * v0.5 hooks are observers + side-effect-runners. They cannot block the agent.
+ * Hook failures (timeout, crash, non-zero exit) are logged but never propagate.
+ *
+ * Future v0.6+ will add:
+ *   - pre-tool-use (block / modify input)
+ *   - user-prompt-submit (transform / validate)
+ *   - blocking semantics for pre- hooks
+ */
+import { spawn } from 'node:child_process';
+import { z } from 'zod';
+import {
+  bundledAutoCommitTraces,
+  bundledMacosNotification,
+  bundledEditorialLint,
+} from './bundled.js';
+import type { Usage } from '../types.js';
+
+// ────────────────────────────────────────────────────────────────────
+// Public types
+// ────────────────────────────────────────────────────────────────────
+
+export type HookEvent = 'pre-agent' | 'post-tool-use' | 'post-agent';
+
+export interface PreAgentContext {
+  event: 'pre-agent';
+  conversationId: string;
+  model: string;
+  prompt: string;
+  toolNames: string[];
+  sandboxPath?: string;
+}
+
+export interface PostToolUseContext {
+  event: 'post-tool-use';
+  conversationId: string;
+  toolName: string;
+  input: unknown;
+  output: unknown;
+  durationMs: number;
+}
+
+export interface PostAgentContext {
+  event: 'post-agent';
+  conversationId: string;
+  model: string;
+  prompt: string;
+  text: string;
+  status: 'completed' | 'aborted_cost_cap' | 'aborted_error' | 'aborted_user' | 'aborted_window_full';
+  usage: Usage;
+  sandboxPath?: string;
+  traceFilePath: string;
+}
+
+export type HookContext = PreAgentContext | PostToolUseContext | PostAgentContext;
+
+export interface HookResult {
+  hookName: string;
+  durationMs: number;
+  success: boolean;
+  warning?: string;
+  error?: string;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Config schema (used by src/config.ts)
+// ────────────────────────────────────────────────────────────────────
+
+export const HookEntrySchema = z.union([
+  z.string().min(1),
+  z.object({
+    command: z.string().min(1),
+    enabled: z.boolean().optional(),
+    timeoutMs: z.number().int().positive().max(300_000).optional(),
+  }),
+]);
+export type HookEntry = z.infer<typeof HookEntrySchema>;
+
+export const HooksConfigSchema = z
+  .object({
+    'pre-agent': z.array(HookEntrySchema).optional(),
+    'post-tool-use': z.array(HookEntrySchema).optional(),
+    'post-agent': z.array(HookEntrySchema).optional(),
+  })
+  .optional();
+export type HooksConfig = z.infer<typeof HooksConfigSchema>;
+
+// ────────────────────────────────────────────────────────────────────
+// Default hooks (per Orlando's v0.5 picks)
+// ────────────────────────────────────────────────────────────────────
+
+export const DEFAULT_HOOKS: NonNullable<HooksConfig> = {
+  'post-agent': [
+    'frqncy-harness-bundled:auto-commit-traces',
+    'frqncy-harness-bundled:macos-notification',
+  ],
+};
+
+// editorial-lint is BUILT but inactive by default (Orlando's choice).
+// User opts in by adding "frqncy-harness-bundled:editorial-lint" to their
+// post-tool-use array in config.json.
+
+// ────────────────────────────────────────────────────────────────────
+// Bundled hook dispatch
+// ────────────────────────────────────────────────────────────────────
+
+const BUNDLED_PREFIX = 'frqncy-harness-bundled:';
+
+const BUNDLED_HOOKS: Record<string, (ctx: HookContext) => Promise<HookResult>> = {
+  'auto-commit-traces': async (ctx) => bundledAutoCommitTraces(ctx),
+  'macos-notification': async (ctx) => bundledMacosNotification(ctx),
+  'editorial-lint': async (ctx) => bundledEditorialLint(ctx),
+};
+
+// ────────────────────────────────────────────────────────────────────
+// HookManager
+// ────────────────────────────────────────────────────────────────────
+
+export class HookManager {
+  /** Resolved hook config — falls back to DEFAULT_HOOKS when user provided nothing */
+  private resolved: NonNullable<HooksConfig>;
+
+  constructor(userConfig: HooksConfig | undefined) {
+    // Defaults apply ONLY when no config was given at all (undefined).
+    // Passing any object (even `{}`) is interpreted as "I'm taking explicit control, use exactly what I provide".
+    // This matches what most users want: an empty config means no hooks, not "give me defaults I didn't ask for."
+    if (userConfig === undefined) {
+      this.resolved = DEFAULT_HOOKS;
+    } else {
+      this.resolved = userConfig;
+    }
+  }
+
+  /**
+   * Fire all hooks registered for an event. Sequential, never blocking the caller.
+   * Returns results for inspection but the caller should NOT make decisions on them
+   * in v0.5 (hooks are observers).
+   */
+  async fire(context: HookContext): Promise<HookResult[]> {
+    const entries = this.resolved[context.event] ?? [];
+    if (entries.length === 0) return [];
+
+    const results: HookResult[] = [];
+    for (const entry of entries) {
+      const enabled = typeof entry === 'object' ? entry.enabled !== false : true;
+      if (!enabled) continue;
+
+      const command = typeof entry === 'string' ? entry : entry.command;
+      const timeoutMs = typeof entry === 'object' ? entry.timeoutMs : undefined;
+
+      try {
+        const result = await this.runOne(command, context, timeoutMs);
+        results.push(result);
+      } catch (err) {
+        results.push({
+          hookName: command,
+          durationMs: 0,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return results;
+  }
+
+  private async runOne(
+    command: string,
+    context: HookContext,
+    timeoutMs?: number,
+  ): Promise<HookResult> {
+    if (command.startsWith(BUNDLED_PREFIX)) {
+      const bundledName = command.slice(BUNDLED_PREFIX.length);
+      const fn = BUNDLED_HOOKS[bundledName];
+      if (!fn) {
+        return {
+          hookName: command,
+          durationMs: 0,
+          success: false,
+          error: `Unknown bundled hook: ${bundledName}. Known: ${Object.keys(BUNDLED_HOOKS).join(', ')}`,
+        };
+      }
+      return fn(context);
+    }
+
+    if (command.endsWith('.js') || command.endsWith('.mjs') || command.endsWith('.ts')) {
+      return runFunctionHook(command, context, timeoutMs ?? 30_000);
+    }
+
+    return runShellHook(command, context, timeoutMs ?? 30_000);
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Shell hook runner
+// ────────────────────────────────────────────────────────────────────
+
+async function runShellHook(
+  command: string,
+  context: HookContext,
+  timeoutMs: number,
+): Promise<HookResult> {
+  const startMs = Date.now();
+  return new Promise<HookResult>((resolve) => {
+    const child = spawn('bash', ['-c', command], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: process.env,
+    });
+
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!child.killed) child.kill('SIGKILL');
+      }, 1000).unref();
+    }, timeoutMs);
+    timer.unref();
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    // Pipe context as JSON to stdin
+    child.stdin.write(JSON.stringify(context));
+    child.stdin.end();
+
+    child.on('close', (exitCode) => {
+      clearTimeout(timer);
+      const durationMs = Date.now() - startMs;
+
+      // Try to parse stdout as a structured response
+      let warning: string | undefined;
+      const trimmed = stdout.trim();
+      if (trimmed) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (typeof parsed === 'object' && parsed !== null && typeof parsed.warning === 'string') {
+            warning = parsed.warning;
+          }
+        } catch {
+          // Plain text output; treat any non-empty stdout from a non-zero-exit
+          // as warning content. Otherwise ignore (it's just logging).
+        }
+      }
+
+      if (exitCode !== 0) {
+        return resolve({
+          hookName: command,
+          durationMs,
+          success: false,
+          error: (stderr || stdout || `exit code ${exitCode}`).trim().slice(0, 500),
+        });
+      }
+
+      const out: HookResult = { hookName: command, durationMs, success: true };
+      if (warning) out.warning = warning;
+      resolve(out);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({
+        hookName: command,
+        durationMs: Date.now() - startMs,
+        success: false,
+        error: err.message,
+      });
+    });
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Function hook runner (dynamic import)
+// ────────────────────────────────────────────────────────────────────
+
+async function runFunctionHook(
+  filePath: string,
+  context: HookContext,
+  timeoutMs: number,
+): Promise<HookResult> {
+  const startMs = Date.now();
+  try {
+    // Resolve to file:// URL for dynamic import
+    const url = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
+    const mod = (await Promise.race([
+      import(url),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`hook import timeout after ${timeoutMs}ms`)), timeoutMs),
+      ),
+    ])) as { default?: (ctx: HookContext) => unknown | Promise<unknown> };
+
+    if (typeof mod.default !== 'function') {
+      return {
+        hookName: filePath,
+        durationMs: Date.now() - startMs,
+        success: false,
+        error: 'Hook file must export a default function',
+      };
+    }
+
+    const result = await Promise.race([
+      Promise.resolve(mod.default(context)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`hook execution timeout after ${timeoutMs}ms`)), timeoutMs),
+      ),
+    ]);
+
+    let warning: string | undefined;
+    if (
+      typeof result === 'object' &&
+      result !== null &&
+      'warning' in result &&
+      typeof (result as { warning?: unknown }).warning === 'string'
+    ) {
+      warning = (result as { warning: string }).warning;
+    }
+
+    const out: HookResult = {
+      hookName: filePath,
+      durationMs: Date.now() - startMs,
+      success: true,
+    };
+    if (warning) out.warning = warning;
+    return out;
+  } catch (err) {
+    return {
+      hookName: filePath,
+      durationMs: Date.now() - startMs,
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+// Re-export the bundled hooks so users can import + reference them in code
+export {
+  bundledAutoCommitTraces,
+  bundledMacosNotification,
+  bundledEditorialLint,
+} from './bundled.js';

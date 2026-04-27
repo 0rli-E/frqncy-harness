@@ -16,14 +16,17 @@ export const TRACE_SCHEMA_VERSION = '0.1.0';
  * Supported providers.
  *
  * API providers (require API key, full feature support — tools, caching, streaming):
- *   - anthropic, openai, google, openrouter
+ *   - anthropic, openai, google, openrouter, chutes
  *
  * Subscription providers (subprocess-wrap an official CLI; uses your $200/mo subscription
  * quota instead of API tokens; no tool support — the official CLI does its own tooling):
  *   - claude-code (wraps `claude -p`; uses Claude Max)
  *   - codex (wraps `codex exec`; uses ChatGPT Pro)
+ *
+ * Chutes is a decentralized inference network (Bittensor-based, OpenAI-compatible). Open-weight
+ * models served via community GPUs; very low cost. Wired in v0.6 as the experimental DeAI lane.
  */
-export const API_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter'] as const;
+export const API_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter', 'chutes'] as const;
 export const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'] as const;
 export const PROVIDERS = [...API_PROVIDERS, ...SUBSCRIPTION_PROVIDERS] as const;
 export type ApiProvider = (typeof API_PROVIDERS)[number];
@@ -103,6 +106,10 @@ export const TraceRecordSchema = z.object({
   latency_ms: z.number().int().nonnegative().optional(),
   attempt_number: z.number().int().positive().optional(),
   fallback_reason: z.string().optional(),
+  /** Thread tag — groups related conversations. v0.5+. Forward-compatible: older records have no tag. */
+  thread_id: z.string().optional(),
+  /** Project tag — usually inherited from the thread. v0.5+. */
+  project_id: z.string().optional(),
   schema_version: z.literal(TRACE_SCHEMA_VERSION),
 });
 export type TraceRecord = z.infer<typeof TraceRecordSchema>;
@@ -132,6 +139,10 @@ export const IndexRecordSchema = z.object({
   total_output_tokens: z.number().int().nonnegative(),
   total_cached_input_tokens: z.number().int().nonnegative(),
   status: ConversationStatusSchema,
+  /** Thread tag — groups related conversations. v0.5+. */
+  thread_id: z.string().optional(),
+  /** Project tag — usually inherited from the thread. v0.5+. */
+  project_id: z.string().optional(),
   schema_version: z.literal(TRACE_SCHEMA_VERSION),
 });
 export type IndexRecord = z.infer<typeof IndexRecordSchema>;
@@ -153,6 +164,10 @@ export const ChatInputSchema = z.object({
   traceDir: z.string().optional(),
   /** Cap on tool-execution steps. Default 1 (no multi-step). */
   maxSteps: z.number().int().positive().max(50).optional(),
+  /** Thread tag — explicit override. If unset, the active thread (if any) is used. */
+  threadId: z.string().optional(),
+  /** Project tag — explicit override. If unset, inherits from the resolved thread. */
+  projectId: z.string().optional(),
 });
 
 // Forward reference — actual HarnessTool type is in src/tools/index.ts
@@ -170,6 +185,14 @@ export interface ChatInput extends z.infer<typeof ChatInputSchema> {
   costCap?: { softWarnUsd?: number; hardAbortUsd?: number };
   /** Lethal-trifecta severity (default 'warn') */
   trifectaSeverity?: 'allow' | 'warn' | 'block';
+  /**
+   * Hooks config (v0.5+). If undefined and `useDefaultHooks` is true (CLI default),
+   * the harness uses the bundled default hooks (auto-commit-traces + macos-notification on post-agent).
+   * Pass `hooksConfig: { 'post-agent': [] }` to disable defaults explicitly.
+   */
+  hooksConfig?: unknown;
+  /** Whether to apply bundled default hooks when no explicit hooksConfig given. CLI passes true; programmatic users default false. */
+  useDefaultHooks?: boolean;
 }
 
 export interface ChatResult {

@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { z } from 'zod';
 import { ModelStringSchema } from './types.js';
+import { HooksConfigSchema } from './hooks/index.js';
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), '.frqncy-harness', 'config.json');
 
@@ -46,6 +47,15 @@ export const ConfigSchema = z.object({
     cachedInputUsdPerM: z.number().nonnegative().optional(),
     notes: z.string().optional(),
   })).default({}),
+
+  /**
+   * Hooks fired at agent lifecycle points (v0.5+).
+   * If undefined, the harness uses sensible defaults (auto-commit traces +
+   * macOS notification on post-agent). To disable a default, set its event
+   * array explicitly to `[]` (e.g., `"hooks": { "post-agent": [] }`).
+   * See src/hooks/index.ts for full type docs and bundled hook references.
+   */
+  hooks: HooksConfigSchema,
 });
 export type Config = z.infer<typeof ConfigSchema>;
 

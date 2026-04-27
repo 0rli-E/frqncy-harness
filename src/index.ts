@@ -105,6 +105,25 @@ export {
   type ApprovalManagerOptions,
 } from './approval.js';
 
+// ── Hooks (v0.5) ─────────────────────────────────────────────
+export {
+  HookManager,
+  HookEntrySchema,
+  HooksConfigSchema,
+  DEFAULT_HOOKS,
+  bundledAutoCommitTraces,
+  bundledMacosNotification,
+  bundledEditorialLint,
+  type HookEvent,
+  type HookContext,
+  type PreAgentContext,
+  type PostToolUseContext,
+  type PostAgentContext,
+  type HookResult,
+  type HookEntry,
+  type HooksConfig,
+} from './hooks/index.js';
+
 // ── Auth (v0.2) ──────────────────────────────────────────────
 export {
   loadAuthStore,

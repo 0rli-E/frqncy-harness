@@ -59,30 +59,31 @@ The decision trace JSONL is the moat. Treat it as append-only, never modify past
 
 ## Building from this scaffold
 
-**Current state: v0.4.0-alpha.1 (shipped 2026-04-26).** 112 tests passing, fully working end-to-end.
+**Current state: v0.6.0-alpha.1.** 155 tests passing, fully working end-to-end.
 
 What's built:
-- Six provider lanes: anthropic, openai, google, openrouter (API path with full feature support — tools, prompt caching) + claude-code, codex (subscription subprocess path — uses Max/Pro quota, no tools)
+- Seven provider lanes: anthropic, openai, google, openrouter, chutes (API path with full feature support — tools, prompt caching where available) + claude-code, codex (subscription subprocess path — uses Max/Pro quota, no tools)
 - Tools: bash (with gtr/tempdir sandbox), read/write/grep/glob, web_fetch, web_search (Tavily/Brave dual-provider)
 - MCP client (Claude Desktop schema-compatible mcp.json + `_harness` extensions)
-- CLI: chat, repl, agent, doctor, config, costs, mcp, auth
+- CLI: chat, repl, agent, doctor, config, costs, mcp, auth, thread
 - External-artifacts pattern in agent mode (init.sh + progress.md + tasks.json + git baseline)
+- AGENT.md / CLAUDE.md auto-load in chat + repl + agent (was agent-only)
 - Cost guardrails (default $5 soft warn / $25 hard abort, configurable)
 - Lethal-trifecta gate (warn by default, configurable to block)
 - Trace storage: `~/.frqncy-harness/traces/<date>/<id>.jsonl` + `INDEX.jsonl`, append-only never-compacted, mirrored to private `github.com/0rli-E/frqncy-harness-traces`
+- **Thread + project tagging (v0.5):** every trace record + index entry can carry `thread_id` and `project_id`; active thread auto-attaches via `~/.frqncy-harness/threads.json`; managed via `frqncy-harness thread {list|new|use|none|rename|delete}`; per-call override via `--thread <id>` / `--project <id>`
+- **Hooks system (v0.5):** three lifecycle events (pre-agent / post-tool-use / post-agent), supports shell / JS / TS / bundled refs; bundled hooks ship for auto-commit-traces, macos-notification, editorial-lint
 - Hermes Agent skill packaging (`hermes-skill.md`) for daemon deployment
-- Auth scaffolding (~/.frqncy-harness/auth/keys.json mode 0600); supports anthropic, openai, google, openrouter, tavily, brave
+- Auth scaffolding (~/.frqncy-harness/auth/keys.json mode 0600); supports anthropic, openai, google, openrouter, tavily, brave, chutes
 
 What's deferred (the "down the roads" — see `/Users/orli/Documents/Claude/Projects/FRQNCY WEBSITE/proposals/HARNESS-PLAN.md`):
 
 1. **Anthropic OAuth via Claude Max** — REVOKED. Anthropic's 2026 ToS prohibits OAuth tokens from consumer subscriptions in third-party tools. Workaround already shipped: subprocess wrap `claude -p` (the `claude-code/*` provider lane). API key is the only legitimate direct-API path.
 2. Inkified REPL — high friction vs value; deferred indefinitely
-3. Thread/project tagging on traces — v0.5
-4. Auto-push traces (the `autoPushTraces` config flag exists but isn't wired) — v0.5
-6. Bi-temporal memory (Graphiti/Zep) — v2+
-7. DSPy + GRPO Python sidecar for trace optimization — v2+
-8. Voyager-style auto-skill library — v3
-9. AG-UI Protocol surface for the FRQNCY Capacitor app — v3
+3. Bi-temporal memory (Graphiti/Zep) — v2+
+4. DSPy + GRPO Python sidecar for trace optimization — v2+
+5. Voyager-style auto-skill library — v3
+6. AG-UI Protocol surface for the FRQNCY Capacitor app — v3
 
 Companion repo: `/Users/orli/Documents/Claude/Projects/FRQNCY WEBSITE/` — the FRQNCY content + planning docs. Read its top-level `CLAUDE.md` for FRQNCY-specific context (editorial values, content schemas, etc.). The FRQNCY content MCP server (`mcp-servers/frqncy-content/` in that repo) is wired in by default — the harness can already query 146 topics + 766 resources as tools.
 
@@ -90,6 +91,5 @@ Companion repo: `/Users/orli/Documents/Claude/Projects/FRQNCY WEBSITE/` — the 
 
 In priority order:
 
-1. **Thread tagging (v0.5)** — add `thread_id` + `project_id` to trace schema; CLI commands to manage threads. Turns the flat trace into the proto-context-graph. ~1.5 hours, ~400 LOC.
-2. **Auto-push traces** — wire the `autoPushTraces` flag to actually push. ~30 min, ~80 LOC.
-3. **Inkified REPL** — visual polish. Deferred indefinitely; only do if asked.
+1. **`frqncy-harness costs` + traces filter by thread** — already records the tags, but neither command surfaces them yet. ~30 min.
+2. **Inkified REPL** — visual polish. Deferred indefinitely; only do if asked.

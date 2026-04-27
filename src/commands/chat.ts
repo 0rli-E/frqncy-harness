@@ -11,6 +11,8 @@ export interface ChatCommandOptions {
   system?: string;
   resume?: string;
   json?: boolean;
+  threadId?: string;
+  projectId?: string;
 }
 
 export async function runChatCommand(prompt: string, options: ChatCommandOptions): Promise<void> {
@@ -44,6 +46,8 @@ export async function runChatCommand(prompt: string, options: ChatCommandOptions
     messages: [{ role: 'user', content: prompt }],
     ...(systemPrompt ? { system: systemPrompt } : {}),
     ...(options.resume ? { conversationId: options.resume } : {}),
+    ...(options.threadId ? { threadId: options.threadId } : {}),
+    ...(options.projectId ? { projectId: options.projectId } : {}),
   })) {
     switch (event.type) {
       case 'text':

@@ -33,6 +33,8 @@ export interface ReplCommandOptions {
   model?: string;
   system?: string;
   resume?: string;
+  threadId?: string;
+  projectId?: string;
 }
 
 export async function runReplCommand(options: ReplCommandOptions): Promise<void> {
@@ -149,6 +151,8 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
         messages,
         ...(currentSystem ? { system: currentSystem } : {}),
         ...(conversationId ? { conversationId } : {}),
+        ...(options.threadId ? { threadId: options.threadId } : {}),
+        ...(options.projectId ? { projectId: options.projectId } : {}),
       })) {
         switch (event.type) {
           case 'text':

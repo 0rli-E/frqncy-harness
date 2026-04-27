@@ -108,6 +108,8 @@ export async function recordConversationEnd(args: {
   cumulativeUsage: Usage;
   status: ConversationStatus;
   traceDir?: string;
+  threadId?: string | undefined;
+  projectId?: string | undefined;
 }): Promise<void> {
   await appendIndexRecord(
     {
@@ -121,6 +123,8 @@ export async function recordConversationEnd(args: {
       total_output_tokens: args.cumulativeUsage.outputTokens,
       total_cached_input_tokens: args.cumulativeUsage.cachedInputTokens ?? 0,
       status: args.status,
+      ...(args.threadId ? { thread_id: args.threadId } : {}),
+      ...(args.projectId ? { project_id: args.projectId } : {}),
     },
     args.traceDir,
   );

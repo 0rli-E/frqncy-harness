@@ -30,8 +30,11 @@ import {
   recordConversationEnd,
   DEFAULT_TRACE_DIR,
 } from './trace.js';
+import { resolveTags, touchActiveThread } from './threads.js';
+import type { TraceRecord } from './types.js';
 import { toAiSdkToolSet, detectLethalTrifecta, type HarnessTool, type ToolContext } from './tools/index.js';
 import { ApprovalManager, type ApprovalCallback } from './approval.js';
+import { HookManager, type HooksConfig } from './hooks/index.js';
 
 export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, void, unknown> {
   // Validate the serializable subset; tools/approval are passed through untouched.
@@ -44,12 +47,33 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
     ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
     ...(input.traceDir !== undefined ? { traceDir: input.traceDir } : {}),
     ...(input.maxSteps !== undefined ? { maxSteps: input.maxSteps } : {}),
+    ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+    ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
   });
 
   const conversationId = serializable.conversationId ?? randomUUID();
   const traceDir = serializable.traceDir ?? DEFAULT_TRACE_DIR;
   const startedAt = new Date();
   const traceFile = getTraceFilePath(conversationId, startedAt, traceDir);
+
+  // ── Thread + project tagging (v0.5) ────────────────────────
+  const tags = await resolveTags({
+    threadId: serializable.threadId,
+    projectId: serializable.projectId,
+  });
+  await touchActiveThread();
+  const traceTagFields = {
+    ...(tags.threadId ? { thread_id: tags.threadId } : {}),
+    ...(tags.projectId ? { project_id: tags.projectId } : {}),
+  };
+  const trace = (rec: Omit<TraceRecord, 'schema_version'>) =>
+    appendTraceRecord(traceFile, { ...rec, ...traceTagFields });
+  const endConv = (rcArgs: Omit<Parameters<typeof recordConversationEnd>[0], 'threadId' | 'projectId'>) =>
+    recordConversationEnd({
+      ...rcArgs,
+      ...(tags.threadId ? { threadId: tags.threadId } : {}),
+      ...(tags.projectId ? { projectId: tags.projectId } : {}),
+    });
 
   // ── Subscription provider lane (Claude Code / Codex subprocess) ──
   const parsed = parseModelString(serializable.model);
@@ -63,6 +87,8 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
       serializable,
       provider: parsed.provider,
       modelId: parsed.modelId,
+      ...(tags.threadId ? { threadId: tags.threadId } : {}),
+      ...(tags.projectId ? { projectId: tags.projectId } : {}),
     });
     return;
   }
@@ -113,11 +139,32 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
   const softWarnUsd = input.costCap?.softWarnUsd ?? 5;
   const hardAbortUsd = input.costCap?.hardAbortUsd ?? 25;
 
+  // ── Hooks (v0.5) ────────────────────────────────────────────
+  // If user passed hooksConfig, use it. Else if useDefaultHooks=true (CLI default),
+  // pass undefined → HookManager applies bundled defaults (auto-commit + notification).
+  // Else (programmatic default): construct an empty HookManager so no hooks fire.
+  const hookManager = input.useDefaultHooks || input.hooksConfig !== undefined
+    ? new HookManager(input.hooksConfig as HooksConfig)
+    : new HookManager({});
+  const lastUserMessage = [...serializable.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+
+  // Fire pre-agent (only meaningful when tools are present — agent loop is happening)
+  if (hasTools) {
+    await hookManager.fire({
+      event: 'pre-agent',
+      conversationId,
+      model: serializable.model,
+      prompt: lastUserMessage,
+      toolNames: tools.map((t) => t.name),
+      ...(input.sandboxPath !== undefined ? { sandboxPath: input.sandboxPath } : {}),
+    });
+  }
+
   // Trace the input messages
   let step = 0;
   for (const message of serializable.messages) {
     if (message.role === 'user' || message.role === 'system') {
-      await appendTraceRecord(traceFile, {
+      await trace({
         ts: new Date().toISOString(),
         conversation_id: conversationId,
         step,
@@ -132,6 +179,9 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
   const callStartedAt = Date.now();
   let assembledText = '';
   let cumulativeUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 };
+
+  // Track in-flight tool calls so post-tool-use hook gets the input + duration
+  const toolCallTimings = new Map<string, { toolName: string; input: unknown; startMs: number }>();
 
   // Capture provider errors so we can re-throw them with proper cause chains
   let capturedError: unknown = null;
@@ -164,7 +214,8 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
         }
         case 'tool-call': {
           const tc = part as { toolCallId: string; toolName: string; input: unknown };
-          await appendTraceRecord(traceFile, {
+          toolCallTimings.set(tc.toolCallId, { toolName: tc.toolName, input: tc.input, startMs: Date.now() });
+          await trace({
             ts: new Date().toISOString(),
             conversation_id: conversationId,
             step,
@@ -181,7 +232,7 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
         }
         case 'tool-result': {
           const tr = part as { toolCallId: string; toolName: string; output: unknown };
-          await appendTraceRecord(traceFile, {
+          await trace({
             ts: new Date().toISOString(),
             conversation_id: conversationId,
             step,
@@ -191,12 +242,26 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
           });
           step++;
           yield { type: 'tool_result', toolCallId: tr.toolCallId, toolName: tr.toolName, output: tr.output };
+
+          // Fire post-tool-use hook (non-blocking, errors swallowed)
+          const timing = toolCallTimings.get(tr.toolCallId);
+          if (timing) {
+            toolCallTimings.delete(tr.toolCallId);
+            await hookManager.fire({
+              event: 'post-tool-use',
+              conversationId,
+              toolName: tr.toolName,
+              input: timing.input,
+              output: tr.output,
+              durationMs: Date.now() - timing.startMs,
+            }).catch(() => { /* hooks never block stream */ });
+          }
           break;
         }
         case 'tool-error': {
           const te = part as { toolCallId: string; toolName: string; error: unknown };
           const errMsg = te.error instanceof Error ? te.error.message : String(te.error);
-          await appendTraceRecord(traceFile, {
+          await trace({
             ts: new Date().toISOString(),
             conversation_id: conversationId,
             step,
@@ -274,7 +339,7 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
         thresholdUsd: hardAbortUsd,
         message: `Cost cap hit: $${cumulativeUsage.costUsd.toFixed(4)} >= hard abort $${hardAbortUsd}. Aborting.`,
       };
-      await appendTraceRecord(traceFile, {
+      await trace({
         ts: new Date().toISOString(),
         conversation_id: conversationId,
         step,
@@ -286,7 +351,7 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
         usage,
         latency_ms: latencyMs,
       });
-      await recordConversationEnd({
+      await endConv({
         conversationId,
         startedAt,
         endedAt: new Date(),
@@ -310,7 +375,7 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
     }
 
     // Trace the assistant response
-    await appendTraceRecord(traceFile, {
+    await trace({
       ts: new Date().toISOString(),
       conversation_id: conversationId,
       step,
@@ -323,7 +388,7 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
       latency_ms: latencyMs,
     });
 
-    await recordConversationEnd({
+    await endConv({
       conversationId,
       startedAt,
       endedAt: new Date(),
@@ -344,9 +409,22 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
     };
 
     yield { type: 'done', result: chatResult };
+
+    // Fire post-agent hook (success path) — non-blocking
+    await hookManager.fire({
+      event: 'post-agent',
+      conversationId,
+      model: serializable.model,
+      prompt: lastUserMessage,
+      text: assembledText,
+      status: 'completed',
+      usage,
+      ...(input.sandboxPath !== undefined ? { sandboxPath: input.sandboxPath } : {}),
+      traceFilePath: traceFile,
+    }).catch(() => { /* hooks never block */ });
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
-    await appendTraceRecord(traceFile, {
+    await trace({
       ts: new Date().toISOString(),
       conversation_id: conversationId,
       step,
@@ -356,17 +434,32 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
       provider,
       latency_ms: Date.now() - callStartedAt,
     });
-    await recordConversationEnd({
+    const errorStatus = error.name === 'CostCapAbortError' ? 'aborted_cost_cap' : 'aborted_error';
+    await endConv({
       conversationId,
       startedAt,
       endedAt: new Date(),
       model: serializable.model,
       messageCount: step,
       cumulativeUsage,
-      status: 'aborted_error',
+      status: errorStatus,
       traceDir,
     });
     yield { type: 'error', error: { name: error.name, message: error.message } };
+
+    // Fire post-agent hook (error path) — non-blocking
+    await hookManager.fire({
+      event: 'post-agent',
+      conversationId,
+      model: serializable.model,
+      prompt: lastUserMessage,
+      text: assembledText,
+      status: errorStatus,
+      usage: cumulativeUsage,
+      ...(input.sandboxPath !== undefined ? { sandboxPath: input.sandboxPath } : {}),
+      traceFilePath: traceFile,
+    }).catch(() => { /* hooks never block */ });
+
     throw error;
   }
 }
@@ -397,10 +490,24 @@ interface StreamSubscriptionArgs {
   serializable: ChatInput;
   provider: 'claude-code' | 'codex';
   modelId: string;
+  threadId?: string;
+  projectId?: string;
 }
 
 async function* streamSubscription(args: StreamSubscriptionArgs): AsyncGenerator<StreamEvent, void, unknown> {
-  const { conversationId, traceDir, traceFile, startedAt, input, serializable, provider, modelId } = args;
+  const { conversationId, traceDir, traceFile, startedAt, input, serializable, provider, modelId, threadId, projectId } = args;
+  const traceTagFields = {
+    ...(threadId ? { thread_id: threadId } : {}),
+    ...(projectId ? { project_id: projectId } : {}),
+  };
+  const trace = (rec: Omit<TraceRecord, 'schema_version'>) =>
+    appendTraceRecord(traceFile, { ...rec, ...traceTagFields });
+  const endConv = (rcArgs: Omit<Parameters<typeof recordConversationEnd>[0], 'threadId' | 'projectId'>) =>
+    recordConversationEnd({
+      ...rcArgs,
+      ...(threadId ? { threadId } : {}),
+      ...(projectId ? { projectId } : {}),
+    });
 
   // Subscription path doesn't support tools — refuse with a clean error if any are passed
   if (input.tools && (input.tools as unknown[]).length > 0) {
@@ -408,7 +515,7 @@ async function* streamSubscription(args: StreamSubscriptionArgs): AsyncGenerator
       `Tools are not supported with subscription provider '${provider}' — the official CLI does its own tooling. ` +
       `Use an API provider (anthropic/*, openai/*, google/*, openrouter/*) for tool-using agents.`;
     const err = Object.assign(new Error(message), { name: 'SubscriptionTools' });
-    await appendTraceRecord(traceFile, {
+    await trace({
       ts: new Date().toISOString(),
       conversation_id: conversationId,
       step: 0,
@@ -417,7 +524,7 @@ async function* streamSubscription(args: StreamSubscriptionArgs): AsyncGenerator
       model: serializable.model,
       provider,
     });
-    await recordConversationEnd({
+    await endConv({
       conversationId,
       startedAt,
       endedAt: new Date(),
@@ -435,7 +542,7 @@ async function* streamSubscription(args: StreamSubscriptionArgs): AsyncGenerator
   let step = 0;
   for (const message of serializable.messages) {
     if (message.role === 'user' || message.role === 'system') {
-      await appendTraceRecord(traceFile, {
+      await trace({
         ts: new Date().toISOString(),
         conversation_id: conversationId,
         step,
@@ -476,7 +583,7 @@ async function* streamSubscription(args: StreamSubscriptionArgs): AsyncGenerator
     }
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
-    await appendTraceRecord(traceFile, {
+    await trace({
       ts: new Date().toISOString(),
       conversation_id: conversationId,
       step,
@@ -486,7 +593,7 @@ async function* streamSubscription(args: StreamSubscriptionArgs): AsyncGenerator
       provider,
       latency_ms: Date.now() - callStartedAt,
     });
-    await recordConversationEnd({
+    await endConv({
       conversationId,
       startedAt,
       endedAt: new Date(),
@@ -502,7 +609,7 @@ async function* streamSubscription(args: StreamSubscriptionArgs): AsyncGenerator
   const latencyMs = Date.now() - callStartedAt;
 
   // Trace assistant response
-  await appendTraceRecord(traceFile, {
+  await trace({
     ts: new Date().toISOString(),
     conversation_id: conversationId,
     step,
@@ -515,7 +622,7 @@ async function* streamSubscription(args: StreamSubscriptionArgs): AsyncGenerator
     latency_ms: latencyMs,
   });
 
-  await recordConversationEnd({
+  await endConv({
     conversationId,
     startedAt,
     endedAt: new Date(),
