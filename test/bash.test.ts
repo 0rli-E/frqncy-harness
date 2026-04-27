@@ -35,8 +35,9 @@ describe('bashTool.execute', () => {
       { command: 'pwd' },
       { conversationId: 'test', cwd: tmpdir() },
     );
-    // tmpdir() may have a /private/ prefix on macOS; just check it ends right
-    expect(result.stdout.trim()).toContain('tmp');
+    // macOS os.tmpdir() returns /var/folders/.../T (no literal "tmp" segment),
+    // Linux returns /tmp; accept either.
+    expect(result.stdout.trim()).toMatch(/\/(tmp|T)\/?$/);
   });
 
   it('enforces timeout', async () => {
