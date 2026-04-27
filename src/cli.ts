@@ -23,7 +23,7 @@ import { runAuthCommand, type AuthSubcommand } from './commands/auth.js';
 import { hydrateApiKeysIntoEnv } from './auth/index.js';
 
 const HELP = `
-@frqncy/harness — plug-and-play LLM harness
+@frqncy-network/harness — plug-and-play LLM harness
 
 Usage:
   frqncy-harness <command> [options]

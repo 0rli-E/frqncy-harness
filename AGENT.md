@@ -1,10 +1,10 @@
 # AGENT.md — instructions for any agent (including Claude itself) editing this repo
 
-This file is the harness's own self-instructions. When you (an agent) work on `@frqncy/harness`, read this first.
+This file is the harness's own self-instructions. When you (an agent) work on `@frqncy-network/harness`, read this first.
 
 ## What this project is
 
-`@frqncy/harness` is a plug-and-play LLM harness for FRQNCY. It is a thin TypeScript library + CLI that wraps the Vercel AI SDK v5 with a provider-indifferent API, a never-compacted trace store, and an opinionated agent loop.
+`@frqncy-network/harness` is a plug-and-play LLM harness for FRQNCY. It is a thin TypeScript library + CLI that wraps the Vercel AI SDK v5 with a provider-indifferent API, a never-compacted trace store, and an opinionated agent loop.
 
 It is NOT a framework. It is NOT a chatbot. It is the *harness layer* — the engineering scaffolding that sits between any LLM and any application. See `harness.md` in the parent FRQNCY WEBSITE repo for the four-essay corpus that motivates the design.
 

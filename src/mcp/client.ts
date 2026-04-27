@@ -57,7 +57,7 @@ export async function connectMcpServer(
   });
 
   const client = new Client(
-    { name: '@frqncy/harness', version: '0.2.0' },
+    { name: '@frqncy-network/harness', version: '0.4.0' },
     { capabilities: {} },
   );
 

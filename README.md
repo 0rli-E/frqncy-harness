@@ -1,10 +1,10 @@
-# @frqncy/harness
+# @frqncy-network/harness
 
 > A plug-and-play LLM harness — provider-indifferent, trace-first, never compacted.
 
-`@frqncy/harness` is the LLM harness that powers FRQNCY's agent surfaces and Orlando's daily workflow. It wraps the [Vercel AI SDK v6](https://sdk.vercel.ai) with direct provider SDKs for tier-1 models (Anthropic Claude, OpenAI, Google Gemini) and OpenRouter for the long tail (Hermes 4, Llama, DeepSeek, Qwen, etc.).
+`@frqncy-network/harness` is the LLM harness that powers FRQNCY's agent surfaces and Orlando's daily workflow. It wraps the [Vercel AI SDK v6](https://sdk.vercel.ai) with direct provider SDKs for tier-1 models (Anthropic Claude, OpenAI, Google Gemini) and OpenRouter for the long tail (Hermes 4, Llama, DeepSeek, Qwen, etc.).
 
-**Status:** v0.2.0-alpha.1 — tools + sandbox land. `chat()`, `stream()`, the trace writer, the CLI, the cost tracker, the config loader, the bash tool, the gtr/tempdir sandbox, the approval system, and the lethal-trifecta detector all ship. Agent loop with external-artifacts pattern, MCP client, file primitives, web tools, and Anthropic OAuth come next.
+**Status:** v0.4.0-alpha.1 — six provider lanes (anthropic / openai / google / openrouter via API + claude-code / codex via subprocess), bash + file + web + web_search tools, MCP client, full agent loop with external-artifacts pattern, gtr/tempdir sandbox, cost guardrails, lethal-trifecta gate, never-compacted JSONL trace store mirrored to a private GitHub repo, and Hermes Agent skill packaging. 112 tests passing.
 
 ---
 
@@ -20,7 +20,7 @@ See the four-essay corpus in [`harness.md`](../harness.md) (TRAE on Harness Engi
 
 ```bash
 # Install
-npm install @frqncy/harness
+npm install @frqncy-network/harness
 
 # Set provider keys (any subset — the harness only requires keys for providers you actually use)
 export ANTHROPIC_API_KEY=sk-...    # or OAuth via Claude Max (recommended, see below)
@@ -30,7 +30,7 @@ export OPENROUTER_API_KEY=sk-or-...
 ```
 
 ```typescript
-import { chat } from '@frqncy/harness';
+import { chat } from '@frqncy-network/harness';
 
 // Same call works across all providers — swap a string, no other changes
 const reply = await chat({
@@ -42,7 +42,7 @@ console.log(reply.text);
 console.log(reply.usage);  // { inputTokens, outputTokens, cachedInputTokens, costUsd }
 
 // Streaming
-import { stream } from '@frqncy/harness';
+import { stream } from '@frqncy-network/harness';
 
 for await (const event of stream({
   model: 'openrouter/nousresearch/hermes-4-405b',
@@ -55,7 +55,7 @@ for await (const event of stream({
 ### With tools (v0.2)
 
 ```typescript
-import { stream, bashTool } from '@frqncy/harness';
+import { stream, bashTool } from '@frqncy-network/harness';
 
 for await (const event of stream({
   model: 'anthropic/claude-sonnet-4-6',

@@ -1,4 +1,4 @@
-# @frqncy/harness — as a Hermes Agent skill
+# @frqncy-network/harness — as a Hermes Agent skill
 
 This file is the **Hermes Agent skill** that lets a running [Hermes Agent](https://hermes-agent.nousresearch.com/) daemon invoke the harness for any user message.
 
@@ -19,7 +19,7 @@ This runs Hermes as a daemon listening on whichever platforms you connect (Teleg
 ### 2. Install the harness globally
 
 ```bash
-npm install -g @frqncy/harness
+npm install -g @frqncy-network/harness
 frqncy-harness doctor   # verify setup
 ```
 
@@ -116,7 +116,7 @@ The alternative is for the harness itself to be a daemon — implementing platfo
 When new harness versions ship:
 
 ```bash
-npm install -g @frqncy/harness@latest
+npm install -g @frqncy-network/harness@latest
 hermes restart
 ```
 
@@ -124,7 +124,7 @@ This skill file rarely changes — most of the action is in the harness itself.
 
 ## Troubleshooting
 
-- **"command not found: frqncy-harness"** — `npm install -g @frqncy/harness` and check that npm's global bin is on Hermes's `PATH`.
+- **"command not found: frqncy-harness"** — `npm install -g @frqncy-network/harness` and check that npm's global bin is on Hermes's `PATH`.
 - **"Anthropic API key is missing"** — set `ANTHROPIC_API_KEY` in Hermes's env, or run `frqncy-harness auth set anthropic <key>` once on the box.
 - **MCP servers configured in `~/.frqncy-harness/mcp.json` aren't connecting from Hermes** — make sure the user running Hermes has read access to that file. Or move the config to a shared location and set `FRQNCY_HARNESS_MCP_CONFIG_PATH` (v0.3+).
 - **High costs in daemon mode** — the harness's per-conversation soft warn and hard abort caps still fire under daemon use. Check `frqncy-harness costs --period 7d` regularly. To tighten: `frqncy-harness config set costCap.hardAbortUsd 5`.

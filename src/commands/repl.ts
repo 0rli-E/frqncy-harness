@@ -45,7 +45,7 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
 
   // Header
   output.write(
-    `${ANSI.bold}${ANSI.cyan}@frqncy/harness REPL${ANSI.reset} ${ANSI.dim}(type /help for commands)${ANSI.reset}\n`,
+    `${ANSI.bold}${ANSI.cyan}@frqncy-network/harness REPL${ANSI.reset} ${ANSI.dim}(type /help for commands)${ANSI.reset}\n`,
   );
   output.write(`${ANSI.dim}model: ${currentModel}${ANSI.reset}\n`);
   if (currentSystem) {

@@ -1,5 +1,5 @@
 /**
- * @frqncy/harness — public API
+ * @frqncy-network/harness — public API
  *
  * v0.0.1 surface: chat() and stream(), with the trace writer behind them.
  * v0.1+ adds: tools, agent loop, MCP client, CLI, sandbox, external artifacts.

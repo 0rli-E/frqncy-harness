@@ -132,7 +132,7 @@ export async function runAgentCommand(prompt: string, options: AgentCommandOptio
       };
 
   // ── Run the agent loop ─────────────────────────────────────
-  output.write(`${ANSI.bold}${ANSI.cyan}@frqncy/harness agent${ANSI.reset} ${ANSI.dim}(model=${model}, maxSteps=${maxSteps})${ANSI.reset}\n`);
+  output.write(`${ANSI.bold}${ANSI.cyan}@frqncy-network/harness agent${ANSI.reset} ${ANSI.dim}(model=${model}, maxSteps=${maxSteps})${ANSI.reset}\n`);
   output.write('\n');
 
   let aborted = false;
@@ -301,7 +301,7 @@ async function loadSystemPrompt(originalCwd: string, prompt: string, sandboxPath
   }
 
   const baseSystem =
-    `You are an agent running inside the @frqncy/harness CLI. ` +
+    `You are an agent running inside the @frqncy-network/harness CLI. ` +
     `You have these tools available: bash, read, write, grep, glob, web_fetch. ` +
     `Your sandbox cwd is: ${sandboxPath}\n\n` +
     `Use external artifacts to track progress: append to progress.md as you work, ` +

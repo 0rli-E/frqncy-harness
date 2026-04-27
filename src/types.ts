@@ -1,5 +1,5 @@
 /**
- * Core types and Zod schemas for @frqncy/harness.
+ * Core types and Zod schemas for @frqncy-network/harness.
  *
  * The trace schema is sacred. Bump TRACE_SCHEMA_VERSION on any breaking change
  * and write a migration in src/trace/migrations/.

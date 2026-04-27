@@ -153,7 +153,7 @@ export async function runDoctorCommand(): Promise<void> {
   }
 
   // ── Print ────────────────────────────────────────────────────
-  process.stdout.write(`\n${ANSI.bold}${ANSI.cyan}@frqncy/harness doctor${ANSI.reset}\n\n`);
+  process.stdout.write(`\n${ANSI.bold}${ANSI.cyan}@frqncy-network/harness doctor${ANSI.reset}\n\n`);
   for (const check of checks) {
     process.stdout.write(`  ${STATUS_GLYPH[check.status]}  ${check.name.padEnd(48)} ${ANSI.dim}${check.message}${ANSI.reset}\n`);
   }

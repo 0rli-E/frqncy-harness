@@ -77,7 +77,7 @@ export async function getProvider(model: ModelString): Promise<ProviderResult> {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'HTTP-Referer': 'https://github.com/0rli-E/frqncy-harness',
-          'X-Title': '@frqncy/harness',
+          'X-Title': '@frqncy-network/harness',
         },
       });
       return { model: openrouter(modelId), provider, modelId };

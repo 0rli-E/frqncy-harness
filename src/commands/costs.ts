@@ -87,7 +87,7 @@ export async function runCostsCommand(options: CostsCommandOptions): Promise<voi
 
   // Pretty print
   const ANSI = { bold: '\x1b[1m', dim: '\x1b[2m', cyan: '\x1b[36m', green: '\x1b[32m', reset: '\x1b[0m' };
-  process.stdout.write(`\n${ANSI.bold}${ANSI.cyan}@frqncy/harness costs${ANSI.reset} ${ANSI.dim}(last ${options.period ?? '7d'})${ANSI.reset}\n\n`);
+  process.stdout.write(`\n${ANSI.bold}${ANSI.cyan}@frqncy-network/harness costs${ANSI.reset} ${ANSI.dim}(last ${options.period ?? '7d'})${ANSI.reset}\n\n`);
   process.stdout.write(`  Conversations:  ${totals.conversations}\n`);
   process.stdout.write(`  Input tokens:   ${totals.totalInputTokens.toLocaleString()}\n`);
   process.stdout.write(`  Output tokens:  ${totals.totalOutputTokens.toLocaleString()}\n`);

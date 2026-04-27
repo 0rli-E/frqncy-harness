@@ -55,7 +55,7 @@ export async function runAuthCommand(subcommand: AuthSubcommand, args: string[])
 
     case 'status': {
       const store = await loadAuthStore();
-      process.stdout.write(`\n${ANSI.bold}${ANSI.cyan}@frqncy/harness auth status${ANSI.reset}\n\n`);
+      process.stdout.write(`\n${ANSI.bold}${ANSI.cyan}@frqncy-network/harness auth status${ANSI.reset}\n\n`);
       for (const provider of AUTH_PROVIDERS) {
         const envVar = ENV_VAR_BY_PROVIDER[provider];
         const envVal = process.env[envVar];
