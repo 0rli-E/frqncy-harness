@@ -26,6 +26,7 @@ import { loadMcpConfig, getEnabledServers } from '../mcp/config.js';
 import { connectMcpServers } from '../mcp/client.js';
 import { flattenMcpToolset } from '../mcp/tool-adapter.js';
 import { loadProjectInstructions } from '../instructions.js';
+import { resolveSkillsForPrompt } from '../skills/index.js';
 import type { ApprovalRequest } from '../approval.js';
 import type { HarnessTool } from '../tools/index.js';
 import type { ModelString } from '../types.js';
@@ -302,10 +303,21 @@ async function loadSystemPrompt(originalCwd: string, prompt: string, sandboxPath
     `and update tasks.json when you complete a discrete step. ` +
     `When the task is complete, write a final summary to progress.md and stop.`;
 
+  let assembled = baseSystem;
   if (loaded) {
-    return `${baseSystem}\n\n--- PROJECT INSTRUCTIONS (from ${loaded.source}) ---\n\n${loaded.content}`;
+    assembled = `${assembled}\n\n--- PROJECT INSTRUCTIONS (from ${loaded.source}) ---\n\n${loaded.content}`;
   }
-  return baseSystem;
+
+  // Auto-inject matching skills (v0.7).
+  const resolved = await resolveSkillsForPrompt(prompt);
+  if (resolved) {
+    assembled = `${assembled}\n\n${resolved.systemAddendum}`;
+    output.write(
+      `${ANSI.dim}skills: ${resolved.matched.map((s) => s.name).join(', ')}${ANSI.reset}\n`,
+    );
+  }
+
+  return assembled;
 }
 
 // ────────────────────────────────────────────────────────────────────

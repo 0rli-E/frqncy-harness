@@ -270,3 +270,82 @@ export async function bundledEditorialLint(ctx: HookContext): Promise<HookResult
     warning,
   };
 }
+
+// ────────────────────────────────────────────────────────────────────
+// 4. Cost-cap monitor (PostAgent) — surfaces guardrails.cost* triggers
+// ────────────────────────────────────────────────────────────────────
+//
+// Lives as a hook so users can replace it (Slack ping, PagerDuty alert, etc.)
+// without forking the harness. The actual *enforcement* (hard abort) still
+// happens inside stream() because hooks are observers in v0.5/v0.7.
+// This hook reports — and could escalate via custom user hooks.
+
+export async function bundledCostCapMonitor(ctx: HookContext): Promise<HookResult> {
+  const startMs = Date.now();
+  if (ctx.event !== 'post-agent') {
+    return {
+      hookName: 'frqncy-harness-bundled:cost-cap-monitor',
+      durationMs: Date.now() - startMs,
+      success: false,
+      error: 'cost-cap-monitor only fires on post-agent (got: ' + ctx.event + ')',
+    };
+  }
+
+  const guardrails = ctx.guardrails;
+  if (!guardrails || (!guardrails.costSoftWarn && !guardrails.costHardAbort)) {
+    return {
+      hookName: 'frqncy-harness-bundled:cost-cap-monitor',
+      durationMs: Date.now() - startMs,
+      success: true,
+    };
+  }
+
+  const cost = guardrails.cumulativeCostUsd.toFixed(4);
+  const note = guardrails.costHardAbort
+    ? `[cost-cap] HARD ABORT at $${cost} — conversation ${ctx.conversationId.slice(0, 8)} stopped.`
+    : `[cost-cap] soft warn at $${cost} — conversation ${ctx.conversationId.slice(0, 8)} continued.`;
+  process.stderr.write(note + '\n');
+
+  return {
+    hookName: 'frqncy-harness-bundled:cost-cap-monitor',
+    durationMs: Date.now() - startMs,
+    success: true,
+    warning: note,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// 5. Trifecta monitor (PostAgent) — surfaces guardrails.trifectaWarn
+// ────────────────────────────────────────────────────────────────────
+
+export async function bundledTrifectaMonitor(ctx: HookContext): Promise<HookResult> {
+  const startMs = Date.now();
+  if (ctx.event !== 'post-agent') {
+    return {
+      hookName: 'frqncy-harness-bundled:trifecta-monitor',
+      durationMs: Date.now() - startMs,
+      success: false,
+      error: 'trifecta-monitor only fires on post-agent (got: ' + ctx.event + ')',
+    };
+  }
+
+  if (!ctx.guardrails || !ctx.guardrails.trifectaWarn) {
+    return {
+      hookName: 'frqncy-harness-bundled:trifecta-monitor',
+      durationMs: Date.now() - startMs,
+      success: true,
+    };
+  }
+
+  const note =
+    `[trifecta] private-data + untrusted-content + outbound-network were all available in conversation ` +
+    `${ctx.conversationId.slice(0, 8)}. Review the trace if untrusted input was processed.`;
+  process.stderr.write(note + '\n');
+
+  return {
+    hookName: 'frqncy-harness-bundled:trifecta-monitor',
+    durationMs: Date.now() - startMs,
+    success: true,
+    warning: note,
+  };
+}

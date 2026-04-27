@@ -176,6 +176,91 @@ describe('Bundled auto-commit-traces', () => {
   });
 });
 
+describe('Bundled cost-cap-monitor (v0.7)', () => {
+  it('is a no-op when no guardrails fired', async () => {
+    const cfg: HooksConfig = {
+      'post-agent': ['frqncy-harness-bundled:cost-cap-monitor'],
+    };
+    const mgr = new HookManager(cfg);
+    const results = await mgr.fire(POST_AGENT_CTX);
+    expect(results[0]!.success).toBe(true);
+    expect(results[0]!.warning).toBeUndefined();
+  });
+
+  it('emits a warning when soft-warn fired', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const cfg: HooksConfig = {
+      'post-agent': ['frqncy-harness-bundled:cost-cap-monitor'],
+    };
+    const mgr = new HookManager(cfg);
+    const results = await mgr.fire({
+      ...POST_AGENT_CTX,
+      guardrails: {
+        costSoftWarn: true,
+        costHardAbort: false,
+        trifectaWarn: false,
+        cumulativeCostUsd: 5.42,
+      },
+    });
+    expect(results[0]!.success).toBe(true);
+    expect(results[0]!.warning).toContain('soft warn');
+    expect(results[0]!.warning).toContain('5.4200');
+    stderrSpy.mockRestore();
+  });
+
+  it('escalates message when hard-abort fired', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const cfg: HooksConfig = {
+      'post-agent': ['frqncy-harness-bundled:cost-cap-monitor'],
+    };
+    const mgr = new HookManager(cfg);
+    const results = await mgr.fire({
+      ...POST_AGENT_CTX,
+      status: 'aborted_cost_cap',
+      guardrails: {
+        costSoftWarn: true,
+        costHardAbort: true,
+        trifectaWarn: false,
+        cumulativeCostUsd: 25.01,
+      },
+    });
+    expect(results[0]!.warning).toContain('HARD ABORT');
+    stderrSpy.mockRestore();
+  });
+});
+
+describe('Bundled trifecta-monitor (v0.7)', () => {
+  it('is a no-op when trifecta did not trigger', async () => {
+    const cfg: HooksConfig = {
+      'post-agent': ['frqncy-harness-bundled:trifecta-monitor'],
+    };
+    const mgr = new HookManager(cfg);
+    const results = await mgr.fire(POST_AGENT_CTX);
+    expect(results[0]!.success).toBe(true);
+    expect(results[0]!.warning).toBeUndefined();
+  });
+
+  it('emits a warning when trifecta triggered', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const cfg: HooksConfig = {
+      'post-agent': ['frqncy-harness-bundled:trifecta-monitor'],
+    };
+    const mgr = new HookManager(cfg);
+    const results = await mgr.fire({
+      ...POST_AGENT_CTX,
+      guardrails: {
+        costSoftWarn: false,
+        costHardAbort: false,
+        trifectaWarn: true,
+        cumulativeCostUsd: 0,
+      },
+    });
+    expect(results[0]!.success).toBe(true);
+    expect(results[0]!.warning).toContain('trifecta');
+    stderrSpy.mockRestore();
+  });
+});
+
 describe('Bundled macos-notification', () => {
   it('skips on non-macOS platforms', async () => {
     if (process.platform === 'darwin') {

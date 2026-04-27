@@ -113,7 +113,10 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
   const aiSdkTools = hasTools ? toAiSdkToolSet(tools, toolContext, approvalManager.asCallback()) : undefined;
 
   // ── Lethal-trifecta gate (decision D5) ─────────────────────
+  // Detection lives here because hooks are observers in v0.7 (cannot block).
+  // The bundled `trifecta-monitor` hook reports it after the run.
   const trifectaSeverity = input.trifectaSeverity ?? 'warn';
+  let trifectaTriggered = false;
   let pendingTrifectaWarn: { type: 'trifecta_warn'; flags: { privateData: boolean; untrustedContent: boolean; outboundNetwork: boolean }; message: string } | null = null;
   if (hasTools && trifectaSeverity !== 'allow') {
     const trifecta = detectLethalTrifecta(tools);
@@ -126,6 +129,7 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
         err.name = 'LethalTrifectaError';
         throw err;
       }
+      trifectaTriggered = true;
       pendingTrifectaWarn = {
         type: 'trifecta_warn',
         flags: { privateData: trifecta.privateData, untrustedContent: trifecta.untrustedContent, outboundNetwork: trifecta.outboundNetwork },
@@ -138,6 +142,10 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
   // ── Cost cap thresholds (decision A7) ──────────────────────
   const softWarnUsd = input.costCap?.softWarnUsd ?? 5;
   const hardAbortUsd = input.costCap?.hardAbortUsd ?? 25;
+  // Track whether the soft/hard thresholds were crossed so the post-agent
+  // hook can surface them via the bundled `cost-cap-monitor` hook (v0.7+).
+  let costSoftWarnTriggered = false;
+  let costHardAbortTriggered = false;
 
   // ── Hooks (v0.5) ────────────────────────────────────────────
   // If user passed hooksConfig, use it. Else if useDefaultHooks=true (CLI default),
@@ -333,6 +341,7 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
 
     // ── Cost cap enforcement ────────────────────────────────
     if (cumulativeUsage.costUsd >= hardAbortUsd) {
+      costHardAbortTriggered = true;
       yield {
         type: 'cost_abort',
         cumulativeCostUsd: cumulativeUsage.costUsd,
@@ -366,6 +375,7 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
       throw err;
     }
     if (cumulativeUsage.costUsd >= softWarnUsd) {
+      costSoftWarnTriggered = true;
       yield {
         type: 'cost_warn',
         cumulativeCostUsd: cumulativeUsage.costUsd,
@@ -421,6 +431,12 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
       usage,
       ...(input.sandboxPath !== undefined ? { sandboxPath: input.sandboxPath } : {}),
       traceFilePath: traceFile,
+      guardrails: {
+        costSoftWarn: costSoftWarnTriggered,
+        costHardAbort: costHardAbortTriggered,
+        trifectaWarn: trifectaTriggered,
+        cumulativeCostUsd: cumulativeUsage.costUsd,
+      },
     }).catch(() => { /* hooks never block */ });
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
@@ -458,6 +474,12 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
       usage: cumulativeUsage,
       ...(input.sandboxPath !== undefined ? { sandboxPath: input.sandboxPath } : {}),
       traceFilePath: traceFile,
+      guardrails: {
+        costSoftWarn: costSoftWarnTriggered,
+        costHardAbort: costHardAbortTriggered,
+        trifectaWarn: trifectaTriggered,
+        cumulativeCostUsd: cumulativeUsage.costUsd,
+      },
     }).catch(() => { /* hooks never block */ });
 
     throw error;

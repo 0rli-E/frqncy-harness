@@ -26,6 +26,8 @@ import {
   bundledAutoCommitTraces,
   bundledMacosNotification,
   bundledEditorialLint,
+  bundledCostCapMonitor,
+  bundledTrifectaMonitor,
 } from './bundled.js';
 import type { Usage } from '../types.js';
 
@@ -53,6 +55,17 @@ export interface PostToolUseContext {
   durationMs: number;
 }
 
+export interface GuardrailEvents {
+  /** True if the cost soft-warn threshold was crossed during the conversation */
+  costSoftWarn: boolean;
+  /** True if the cost hard-abort threshold was crossed (status will be 'aborted_cost_cap') */
+  costHardAbort: boolean;
+  /** True if the lethal-trifecta gate emitted a warning at agent start */
+  trifectaWarn: boolean;
+  /** Cumulative cost in USD at end-of-conversation (for monitor hooks) */
+  cumulativeCostUsd: number;
+}
+
 export interface PostAgentContext {
   event: 'post-agent';
   conversationId: string;
@@ -63,6 +76,8 @@ export interface PostAgentContext {
   usage: Usage;
   sandboxPath?: string;
   traceFilePath: string;
+  /** Snapshot of any guardrail triggers that fired during the run (v0.7+) */
+  guardrails?: GuardrailEvents;
 }
 
 export type HookContext = PreAgentContext | PostToolUseContext | PostAgentContext;
@@ -123,6 +138,8 @@ const BUNDLED_HOOKS: Record<string, (ctx: HookContext) => Promise<HookResult>> =
   'auto-commit-traces': async (ctx) => bundledAutoCommitTraces(ctx),
   'macos-notification': async (ctx) => bundledMacosNotification(ctx),
   'editorial-lint': async (ctx) => bundledEditorialLint(ctx),
+  'cost-cap-monitor': async (ctx) => bundledCostCapMonitor(ctx),
+  'trifecta-monitor': async (ctx) => bundledTrifectaMonitor(ctx),
 };
 
 // ────────────────────────────────────────────────────────────────────
@@ -353,4 +370,6 @@ export {
   bundledAutoCommitTraces,
   bundledMacosNotification,
   bundledEditorialLint,
+  bundledCostCapMonitor,
+  bundledTrifectaMonitor,
 } from './bundled.js';

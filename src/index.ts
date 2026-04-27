@@ -105,6 +105,27 @@ export {
   type ApprovalManagerOptions,
 } from './approval.js';
 
+// ── Skills (v0.7) ────────────────────────────────────────────
+export {
+  loadSkills,
+  matchSkills,
+  parseSkillFile,
+  formatSkillsForSystemPrompt,
+  resolveSkillsForPrompt,
+  DEFAULT_SKILLS_DIR,
+  SkillFrontmatterSchema,
+  type LoadedSkill,
+  type SkillFrontmatter,
+  type ResolvedSkills,
+} from './skills/index.js';
+
+// ── Project instructions (v0.7) ──────────────────────────────
+export {
+  loadProjectInstructions,
+  INSTRUCTION_FILES,
+  type LoadedInstructions,
+} from './instructions.js';
+
 // ── Hooks (v0.5) ─────────────────────────────────────────────
 export {
   HookManager,
@@ -114,11 +135,14 @@ export {
   bundledAutoCommitTraces,
   bundledMacosNotification,
   bundledEditorialLint,
+  bundledCostCapMonitor,
+  bundledTrifectaMonitor,
   type HookEvent,
   type HookContext,
   type PreAgentContext,
   type PostToolUseContext,
   type PostAgentContext,
+  type GuardrailEvents,
   type HookResult,
   type HookEntry,
   type HooksConfig,

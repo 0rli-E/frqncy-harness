@@ -4,6 +4,7 @@
 import { stream } from '../stream.js';
 import { loadConfig } from '../config.js';
 import { loadProjectInstructions } from '../instructions.js';
+import { resolveSkillsForPrompt } from '../skills/index.js';
 import type { ModelString, Usage } from '../types.js';
 
 export interface ChatCommandOptions {
@@ -36,6 +37,19 @@ export async function runChatCommand(prompt: string, options: ChatCommandOptions
       systemPrompt = loaded.content;
       if (!options.json) {
         process.stderr.write(`[loaded ${loaded.source}]\n`);
+      }
+    }
+  }
+
+  // Auto-inject matching skills (v0.7) — only on a fresh conversation.
+  if (!options.resume) {
+    const resolved = await resolveSkillsForPrompt(prompt);
+    if (resolved) {
+      systemPrompt = systemPrompt
+        ? `${systemPrompt}\n\n${resolved.systemAddendum}`
+        : resolved.systemAddendum;
+      if (!options.json) {
+        process.stderr.write(`[loaded ${resolved.matched.length} skill(s): ${resolved.matched.map((s) => s.name).join(', ')}]\n`);
       }
     }
   }

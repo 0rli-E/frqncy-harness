@@ -22,6 +22,8 @@ import { runMcpCommand, type McpSubcommand } from './commands/mcp.js';
 import { runAuthCommand, type AuthSubcommand } from './commands/auth.js';
 import { runThreadCommand, type ThreadSubcommand } from './commands/thread.js';
 import { runTracesCommand, type TracesSubcommand } from './commands/traces.js';
+import { runSkillsCommand, type SkillsSubcommand } from './commands/skills.js';
+import { runReplayCommand } from './commands/replay.js';
 import { hydrateApiKeysIntoEnv } from './auth/index.js';
 
 const HELP = `
@@ -56,6 +58,13 @@ Commands:
                            | use <id> | none | rename <old> <new> | delete <id> | path
                            (Tags every conversation's trace + index with thread/project ids;
                             chat/repl/agent take --thread <id> to override the active thread)
+  skills <subcmd> [args]   list | show <name> | path | match "<prompt>"
+                           (Skills are markdown packs at ~/.frqncy-harness/skills/<name>/SKILL.md
+                            with YAML frontmatter; auto-injected into chat/repl/agent system prompts
+                            when the prompt matches the skill's keywords or description.)
+  replay <conv-id>         Re-run a saved conversation against a (potentially different) model.
+                           Options: --model <m>, --diff, --json, --thread <id>
+                           (--diff prints a side-by-side comparison vs the original assistant reply.)
 
 Global:
   --version, -v            Print version
@@ -92,7 +101,7 @@ Examples:
 Docs: https://github.com/0rli-E/frqncy-harness#readme
 `;
 
-const VERSION = '0.6.0-alpha.1';
+const VERSION = '0.7.0-alpha.1';
 
 interface ParsedArgs {
   command?: string;
@@ -255,6 +264,26 @@ async function main(): Promise<void> {
           );
         }
         await runThreadCommand(sub, positional.slice(1));
+        break;
+      }
+      case 'skills': {
+        const sub = positional[0] as SkillsSubcommand | undefined;
+        if (!sub) {
+          throw new Error('Usage: frqncy-harness skills <list|show|path|match> [args]');
+        }
+        await runSkillsCommand(sub, positional.slice(1));
+        break;
+      }
+      case 'replay': {
+        const id = positional[0];
+        if (!id) throw new Error('Usage: frqncy-harness replay <conversation-id> [--model <m>] [--diff] [--json]');
+        await runReplayCommand(id, {
+          ...(flagString(flags, 'model') ? { model: flagString(flags, 'model')! } : {}),
+          diff: flagBool(flags, 'diff'),
+          json: flagBool(flags, 'json'),
+          ...(flagString(flags, 'thread') ? { threadId: flagString(flags, 'thread')! } : {}),
+          ...(flagString(flags, 'project') ? { projectId: flagString(flags, 'project')! } : {}),
+        });
         break;
       }
       default:

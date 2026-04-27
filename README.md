@@ -4,7 +4,7 @@
 
 `@frqncy-network/harness` is the LLM harness that powers FRQNCY's agent surfaces and Orlando's daily workflow. It wraps the [Vercel AI SDK v6](https://sdk.vercel.ai) with direct provider SDKs for tier-1 models (Anthropic Claude, OpenAI, Google Gemini) and OpenRouter for the long tail (Hermes 4, Llama, DeepSeek, Qwen, etc.).
 
-**Status:** v0.4.0-alpha.1 — six provider lanes (anthropic / openai / google / openrouter via API + claude-code / codex via subprocess), bash + file + web + web_search tools, MCP client, full agent loop with external-artifacts pattern, gtr/tempdir sandbox, cost guardrails, lethal-trifecta gate, never-compacted JSONL trace store mirrored to a private GitHub repo, and Hermes Agent skill packaging. 112 tests passing.
+**Status:** v0.7.0-alpha.1 — seven provider lanes (anthropic / openai / google / openrouter / chutes via API + claude-code / codex via subprocess), bash + file + web + web_search tools, MCP client, full agent loop with external-artifacts pattern, gtr/tempdir sandbox, cost guardrails, lethal-trifecta gate, never-compacted JSONL trace store mirrored to a private GitHub repo, hooks (5 bundled: auto-commit-traces, macos-notification, editorial-lint, cost-cap-monitor, trifecta-monitor), thread + project tagging, AGENT.md / CLAUDE.md auto-load in chat / repl / agent, **skill packs** (drop in `~/.frqncy-harness/skills/<name>/SKILL.md` and they auto-inject when the prompt matches), and **trace replay + diff** (`frqncy-harness replay <id> --diff` to compare a saved conversation against a different model).
 
 ---
 

@@ -16,6 +16,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { stream } from '../stream.js';
 import { loadConfig } from '../config.js';
 import { loadProjectInstructions } from '../instructions.js';
+import { loadSkills, matchSkills, formatSkillsForSystemPrompt, type LoadedSkill } from '../skills/index.js';
 import type { Message, ModelString, Usage } from '../types.js';
 
 const ANSI = {
@@ -52,6 +53,21 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
     if (loaded) {
       currentSystem = loaded.content;
       systemSource = loaded.source;
+    }
+  }
+
+  // Skills are loaded once at REPL start; matched on each user turn so the
+  // system prompt grows with the conversation's topic. Already-injected
+  // skills are tracked so we don't re-inject the same body twice.
+  const allSkills: LoadedSkill[] = await loadSkills();
+  const injectedSkills = new Set<string>();
+  // Pre-inject any "always" skills upfront.
+  if (allSkills.length > 0) {
+    const alwaysOn = allSkills.filter((s) => s.always);
+    if (alwaysOn.length > 0) {
+      const addendum = formatSkillsForSystemPrompt(alwaysOn);
+      currentSystem = currentSystem ? `${currentSystem}\n\n${addendum}` : addendum;
+      for (const s of alwaysOn) injectedSkills.add(s.name);
     }
   }
 
@@ -140,6 +156,21 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
 
     // Regular user message — append to history and call the model
     messages.push({ role: 'user', content: trimmed });
+
+    // Per-turn skill matching: if a new skill triggers on this user input,
+    // append its body to the running system prompt for subsequent turns.
+    if (allSkills.length > 0) {
+      const newlyMatched = matchSkills(trimmed, allSkills).filter((s) => !injectedSkills.has(s.name));
+      if (newlyMatched.length > 0) {
+        const addendum = formatSkillsForSystemPrompt(newlyMatched);
+        currentSystem = currentSystem ? `${currentSystem}\n\n${addendum}` : addendum;
+        for (const s of newlyMatched) injectedSkills.add(s.name);
+        output.write(
+          `${ANSI.dim}[+ skill: ${newlyMatched.map((s) => s.name).join(', ')}]${ANSI.reset}\n`,
+        );
+      }
+    }
+
     output.write(`${ANSI.green}${currentModel.split('/').pop()} ▸${ANSI.reset} `);
 
     let assistantText = '';
