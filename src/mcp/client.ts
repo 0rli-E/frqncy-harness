@@ -61,12 +61,29 @@ export async function connectMcpServer(
     { capabilities: {} },
   );
 
-  // Race the connect against a timeout
+  // Race the connect against a timeout. If the timeout wins, we still need to
+  // close the stdio transport — otherwise the spawned subprocess (and its pipes)
+  // leak file descriptors. Repeated MCP connect attempts in a long-running
+  // session would eventually exhaust FDs.
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const connectPromise = client.connect(transport);
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`MCP server '${name}' connect timeout after ${timeoutMs}ms`)), timeoutMs),
-  );
-  await Promise.race([connectPromise, timeoutPromise]);
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(
+      () => reject(new Error(`MCP server '${name}' connect timeout after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+  try {
+    await Promise.race([connectPromise, timeoutPromise]);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  } catch (err) {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    // Best-effort: close the transport so the subprocess and its FDs are released.
+    // We swallow errors here because the original connect failure is what the
+    // caller cares about.
+    try { await transport.close(); } catch { /* ignore */ }
+    throw err;
+  }
 
   // List tools
   const listed = await client.listTools();

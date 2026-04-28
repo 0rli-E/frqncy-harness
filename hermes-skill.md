@@ -25,18 +25,22 @@ frqncy-harness doctor   # verify setup
 
 ### 3. Drop this file in Hermes's skills directory
 
+Hermes loads skills from `~/.hermes/skills/<skill-name>/SKILL.md` (one folder per skill, file always named `SKILL.md`):
+
 ```bash
-mkdir -p ~/.hermes-agent/skills/
-cp hermes-skill.md ~/.hermes-agent/skills/frqncy-harness.md
+mkdir -p ~/.hermes/skills/frqncy-harness
+cp hermes-skill.md ~/.hermes/skills/frqncy-harness/SKILL.md
 ```
 
-(Or wherever Hermes Agent loads skills on your install. Check `hermes config show`.)
+Run `hermes config show` to confirm the skills directory on your install — older builds used `~/.hermes-agent/skills/<name>.md` (single file per skill); current builds use the folder layout above.
 
 ### 4. (Optional) Set provider keys in Hermes's env so the harness inherits them
 
+The env file location varies by Hermes version — `hermes config show` will print the path. Common locations are `~/.hermes/env` (current) or `~/.hermes-agent/env` (older builds).
+
 ```bash
-echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.hermes-agent/env
-echo 'export OPENROUTER_API_KEY=sk-or-...' >> ~/.hermes-agent/env
+echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.hermes/env
+echo 'export OPENROUTER_API_KEY=sk-or-...' >> ~/.hermes/env
 hermes restart
 ```
 
@@ -91,7 +95,7 @@ The agent loop creates a sandbox, scaffolds external artifacts (`progress.md` + 
 
 ## Recommended Hermes routing
 
-Add this rule to your Hermes config (`~/.hermes-agent/routing.yaml` or via `hermes config`):
+Add this rule to your Hermes config (`~/.hermes/routing.yaml` on current builds, `~/.hermes-agent/routing.yaml` on older — confirm with `hermes config`):
 
 ```yaml
 default_skill: frqncy-harness

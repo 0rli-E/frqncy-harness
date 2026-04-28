@@ -101,7 +101,14 @@ export const bashTool: HarnessTool<BashInput, BashOutput> = {
       }, timeout);
       timer.unref();
 
+      // Guard against double-resolve: 'close' and 'error' can both fire on some
+      // platforms (especially after SIGKILL), and the second resolve() is a no-op
+      // but the surrounding logic (logging, buffer assembly) would run twice.
+      let settled = false;
+
       child.on('close', (exitCode) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         stdout = Buffer.concat(stdoutChunks).toString('utf-8');
         stderr = Buffer.concat(stderrChunks).toString('utf-8');
@@ -124,6 +131,8 @@ export const bashTool: HarnessTool<BashInput, BashOutput> = {
       });
 
       child.on('error', (err) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         resolve({
           stdout: '',
