@@ -12,7 +12,9 @@ export {
   PROVIDERS,
   API_PROVIDERS,
   SUBSCRIPTION_PROVIDERS,
+  SDK_PROVIDERS,
   isSubscriptionProvider,
+  isSdkProvider,
   type ChatInput,
   type ChatResult,
   type Message,
@@ -20,6 +22,7 @@ export {
   type Provider,
   type ApiProvider,
   type SubscriptionProvider,
+  type SdkProvider,
   type Role,
   type StreamEvent,
   type TraceRecord,
@@ -45,6 +48,11 @@ export {
   isCodexAvailable,
   type SubscriptionRunOptions,
 } from './providers/subprocess.js';
+export {
+  runSdkProvider,
+  isClaudeAgentSdkAvailable,
+  type SdkRunOptions,
+} from './providers/sdk.js';
 
 export { computeCost, getModelRate, DEFAULT_RATES, type ModelRate } from './pricing.js';
 

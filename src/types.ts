@@ -16,25 +16,41 @@ export const TRACE_SCHEMA_VERSION = '0.1.0';
  * Supported providers.
  *
  * API providers (require API key, full feature support — tools, caching, streaming):
- *   - anthropic, openai, google, openrouter, chutes
+ *   - anthropic, openai, google, openrouter, chutes, perplexity
  *
  * Subscription providers (subprocess-wrap an official CLI; uses your $200/mo subscription
  * quota instead of API tokens; no tool support — the official CLI does its own tooling):
  *   - claude-code (wraps `claude -p`; uses Claude Max)
  *   - codex (wraps `codex exec`; uses ChatGPT Pro)
  *
+ * SDK providers (programmatic agent loop via official SDK; full tool/MCP/hook support;
+ * structured per-token usage; runs in-process so no CLI subprocess overhead):
+ *   - claude-sdk (uses `@anthropic-ai/claude-agent-sdk`'s query() — supersedes the
+ *     claude-code subprocess lane for any case where you have an API key. Subscription
+ *     OAuth is deferred until Anthropic's 2026 ToS situation clears, see HARNESS-PLAN.md
+ *     decision 4 revision.)
+ *
  * Chutes is a decentralized inference network (Bittensor-based, OpenAI-compatible). Open-weight
  * models served via community GPUs; very low cost. Wired in v0.6 as the experimental DeAI lane.
+ *
+ * Perplexity is a search-grounded LLM provider (sonar family). Returns structured `sources`
+ * alongside text via the @ai-sdk/perplexity adapter. Wired in v0.7 as the search-grounded lane.
  */
-export const API_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter', 'chutes'] as const;
+export const API_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter', 'chutes', 'perplexity'] as const;
 export const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'] as const;
-export const PROVIDERS = [...API_PROVIDERS, ...SUBSCRIPTION_PROVIDERS] as const;
+export const SDK_PROVIDERS = ['claude-sdk'] as const;
+export const PROVIDERS = [...API_PROVIDERS, ...SUBSCRIPTION_PROVIDERS, ...SDK_PROVIDERS] as const;
 export type ApiProvider = (typeof API_PROVIDERS)[number];
 export type SubscriptionProvider = (typeof SUBSCRIPTION_PROVIDERS)[number];
+export type SdkProvider = (typeof SDK_PROVIDERS)[number];
 export type Provider = (typeof PROVIDERS)[number];
 
 export function isSubscriptionProvider(p: Provider): p is SubscriptionProvider {
   return (SUBSCRIPTION_PROVIDERS as readonly string[]).includes(p);
+}
+
+export function isSdkProvider(p: Provider): p is SdkProvider {
+  return (SDK_PROVIDERS as readonly string[]).includes(p);
 }
 
 /**

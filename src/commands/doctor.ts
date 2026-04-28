@@ -58,6 +58,7 @@ export async function runDoctorCommand(): Promise<void> {
     { name: 'GOOGLE_GENERATIVE_AI_API_KEY', envVar: 'GOOGLE_GENERATIVE_AI_API_KEY' },
     { name: 'OPENROUTER_API_KEY', envVar: 'OPENROUTER_API_KEY' },
     { name: 'CHUTES_API_KEY (DeAI lane)', envVar: 'CHUTES_API_KEY' },
+    { name: 'PERPLEXITY_API_KEY (search-grounded lane)', envVar: 'PERPLEXITY_API_KEY' },
     { name: 'TAVILY_API_KEY (web_search)', envVar: 'TAVILY_API_KEY' },
     { name: 'BRAVE_SEARCH_API_KEY (web_search)', envVar: 'BRAVE_SEARCH_API_KEY' },
   ];
@@ -84,6 +85,26 @@ export async function runDoctorCommand(): Promise<void> {
   checks.push(
     checkCommand('codex (OpenAI Codex CLI)', 'codex --version', 'enables codex/* models — uses ChatGPT Pro subscription'),
   );
+
+  // ── SDK provider — Claude Agent SDK package ──────────────────
+  // Lazy-imported by src/providers/sdk.ts at first use. Installed → claude-sdk/* lane works.
+  try {
+    const { isClaudeAgentSdkAvailable } = await import('../providers/sdk.js');
+    const present = await isClaudeAgentSdkAvailable();
+    checks.push({
+      name: '@anthropic-ai/claude-agent-sdk',
+      status: present ? 'ok' : 'info',
+      message: present
+        ? 'installed — enables claude-sdk/* models (in-process agent loop, real per-token cost)'
+        : 'not installed — claude-sdk/* models will fail until `npm install @anthropic-ai/claude-agent-sdk`',
+    });
+  } catch {
+    checks.push({
+      name: '@anthropic-ai/claude-agent-sdk',
+      status: 'info',
+      message: 'unable to probe (sdk.ts import failed)',
+    });
+  }
 
   // ── Config file ──────────────────────────────────────────────
   try {

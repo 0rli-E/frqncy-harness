@@ -35,8 +35,10 @@ Usage:
 Commands:
   chat <prompt>            One-shot completion. Streams to stdout.
                            Options: --model <m>, --system <s>, --resume <id>, --json
-  repl                     Interactive REPL. Slash commands inside: /model, /new, /system, /help, /exit
+  repl                     Interactive REPL. Slash commands inside: /model, /new, /system, /tools, /yolo, /help, /exit
                            Options: --model <m>, --system <s>, --resume <id>
+                                    --agent (enable tools + MCP + sandbox for a persistent agent conversation)
+                                    --yolo, --max-steps <n>, --no-sandbox (only with --agent)
   agent <prompt>           Multi-step agent loop with tools (bash, file, web).
                            Creates a sandbox + external artifacts (progress.md, tasks.json, init.sh).
                            Options: --model <m>, --yolo, --max-steps <n>, --no-sandbox, --no-artifacts
@@ -80,6 +82,14 @@ Model strings (API path — pay per token, full feature support):
   google/gemini-2.5-flash
   openrouter/<provider>/<model>   (e.g. openrouter/nousresearch/hermes-4-405b)
   chutes/<provider>/<model>       (decentralized inference, set CHUTES_API_KEY; e.g. chutes/deepseek-ai/deepseek-r1)
+  perplexity/sonar                (search-grounded; returns sources alongside text)
+  perplexity/sonar-pro
+  perplexity/sonar-reasoning      (DeepSeek R1 + Perplexity search)
+
+Model strings (SDK path — programmatic agent loop; full tool/MCP/hook support, real per-token cost):
+  claude-sdk/claude-sonnet-4-6    (uses @anthropic-ai/claude-agent-sdk; needs ANTHROPIC_API_KEY)
+  claude-sdk/claude-opus-4-6
+  claude-sdk/claude-haiku-4-5-20251001
 
 Model strings (subscription path — uses your Max/Pro quota; no tools, limited streaming):
   claude-code/sonnet              (requires "claude" CLI installed; uses Claude Max)
@@ -94,6 +104,7 @@ Examples:
   frqncy-harness chat "what is MCP" --model claude-code/sonnet     # uses Claude Max
   frqncy-harness chat "explain context graphs" --model codex/default # uses ChatGPT Pro
   frqncy-harness repl --model openrouter/nousresearch/hermes-4-405b
+  frqncy-harness repl --agent --model openrouter/google/gemini-2.5-flash --yolo  # persistent agent chat
   frqncy-harness config set defaultModel claude-code/sonnet
   frqncy-harness config set costCap.softWarnUsd 10
   frqncy-harness costs --period 30d
@@ -186,12 +197,17 @@ async function main(): Promise<void> {
         break;
       }
       case 'repl': {
+        const replMaxStepsStr = flagString(flags, 'max-steps');
         await runReplCommand({
           ...(flagString(flags, 'model') ? { model: flagString(flags, 'model')! } : {}),
           ...(flagString(flags, 'system') ? { system: flagString(flags, 'system')! } : {}),
           ...(flagString(flags, 'resume') ? { resume: flagString(flags, 'resume')! } : {}),
           ...(flagString(flags, 'thread') ? { threadId: flagString(flags, 'thread')! } : {}),
           ...(flagString(flags, 'project') ? { projectId: flagString(flags, 'project')! } : {}),
+          agent: flagBool(flags, 'agent'),
+          yolo: flagBool(flags, 'yolo'),
+          ...(replMaxStepsStr ? { maxSteps: Number(replMaxStepsStr) } : {}),
+          noSandbox: flagBool(flags, 'no-sandbox'),
         });
         break;
       }

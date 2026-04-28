@@ -98,11 +98,34 @@ export async function getProvider(model: ModelString): Promise<ProviderResult> {
       });
       return { model: chutes(modelId), provider, modelId };
     }
+    case 'perplexity': {
+      // First-party @ai-sdk/perplexity adapter. We use this rather than the OpenAI-compatible
+      // baseURL approach because Perplexity's value-add is the structured `sources` array
+      // returned alongside text — losing that would gut the trace integrity for grounded
+      // queries (sources would only live inside the assistant text body).
+      const { perplexity } = await import('@ai-sdk/perplexity');
+      // The provider reads PERPLEXITY_API_KEY from env automatically; auth/hydrateApiKeysIntoEnv()
+      // copies the stored key into env at CLI startup, so no explicit apiKey arg needed here.
+      if (!process.env['PERPLEXITY_API_KEY']) {
+        throw new Error(
+          'PERPLEXITY_API_KEY environment variable is required for Perplexity models. ' +
+            "Get a key at https://www.perplexity.ai/account/api/keys (Pro/Max subscriptions include monthly API credit), " +
+            "then set via env or `frqncy-harness auth set perplexity <key>`.",
+        );
+      }
+      return { model: perplexity(modelId), provider, modelId };
+    }
     case 'claude-code':
     case 'codex':
       throw new Error(
         `Provider '${provider}' is a subscription provider — it doesn't return an AI SDK LanguageModel. ` +
           `Subscription providers run via subprocess (src/providers/subprocess.ts) and are routed separately ` +
+          `inside stream()/chat(). If you reached this code path, it's a bug — getProvider() should not have been called.`,
+      );
+    case 'claude-sdk':
+      throw new Error(
+        `Provider 'claude-sdk' is an SDK provider — it doesn't return an AI SDK LanguageModel. ` +
+          `SDK providers run their own agent loop (src/providers/sdk.ts) and are routed separately ` +
           `inside stream()/chat(). If you reached this code path, it's a bug — getProvider() should not have been called.`,
       );
   }

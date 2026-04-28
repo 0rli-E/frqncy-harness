@@ -23,7 +23,8 @@ import {
 } from './types.js';
 import { getProvider, computeCostUsd, parseModelString } from './providers/index.js';
 import { runSubscription } from './providers/subprocess.js';
-import { isSubscriptionProvider } from './types.js';
+import { runSdkProvider } from './providers/sdk.js';
+import { isSubscriptionProvider, isSdkProvider } from './types.js';
 import {
   appendTraceRecord,
   getTraceFilePath,
@@ -79,6 +80,23 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
   const parsed = parseModelString(serializable.model);
   if (isSubscriptionProvider(parsed.provider)) {
     yield* streamSubscription({
+      conversationId,
+      traceDir,
+      traceFile,
+      startedAt,
+      input,
+      serializable,
+      provider: parsed.provider,
+      modelId: parsed.modelId,
+      ...(tags.threadId ? { threadId: tags.threadId } : {}),
+      ...(tags.projectId ? { projectId: tags.projectId } : {}),
+    });
+    return;
+  }
+
+  // ── SDK provider lane (Claude Agent SDK in-process) ─────────────
+  if (isSdkProvider(parsed.provider)) {
+    yield* streamSdk({
       conversationId,
       traceDir,
       traceFile,
@@ -631,6 +649,198 @@ async function* streamSubscription(args: StreamSubscriptionArgs): AsyncGenerator
   const latencyMs = Date.now() - callStartedAt;
 
   // Trace assistant response
+  await trace({
+    ts: new Date().toISOString(),
+    conversation_id: conversationId,
+    step,
+    type: 'assistant',
+    role: 'assistant',
+    content: assembledText,
+    model: serializable.model,
+    provider,
+    usage: finalUsage,
+    latency_ms: latencyMs,
+  });
+
+  await endConv({
+    conversationId,
+    startedAt,
+    endedAt: new Date(),
+    model: serializable.model,
+    messageCount: step + 1,
+    cumulativeUsage: finalUsage,
+    status: 'completed',
+    traceDir,
+  });
+
+  const chatResult: ChatResult = {
+    text: assembledText,
+    conversationId,
+    usage: finalUsage,
+    model: serializable.model as ModelString,
+    provider: provider as Provider,
+    finishReason: 'stop',
+  };
+
+  yield { type: 'done', result: chatResult };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// SDK provider routing (claude-sdk via @anthropic-ai/claude-agent-sdk)
+// ────────────────────────────────────────────────────────────────────
+
+interface StreamSdkArgs {
+  conversationId: string;
+  traceDir: string;
+  traceFile: string;
+  startedAt: Date;
+  input: ChatInput;
+  serializable: ChatInput;
+  provider: 'claude-sdk';
+  modelId: string;
+  threadId?: string;
+  projectId?: string;
+}
+
+async function* streamSdk(args: StreamSdkArgs): AsyncGenerator<StreamEvent, void, unknown> {
+  const { conversationId, traceDir, traceFile, startedAt, input, serializable, provider, modelId, threadId, projectId } = args;
+  const traceTagFields = {
+    ...(threadId ? { thread_id: threadId } : {}),
+    ...(projectId ? { project_id: projectId } : {}),
+  };
+  const trace = (rec: Omit<TraceRecord, 'schema_version'>) =>
+    appendTraceRecord(traceFile, { ...rec, ...traceTagFields });
+  const endConv = (rcArgs: Omit<Parameters<typeof recordConversationEnd>[0], 'threadId' | 'projectId'>) =>
+    recordConversationEnd({
+      ...rcArgs,
+      ...(threadId ? { threadId } : {}),
+      ...(projectId ? { projectId } : {}),
+    });
+
+  // SDK lane note on tools: the harness's HarnessTool[] is NOT bridged into the
+  // SDK's tool registry in v0.7. The SDK uses its own default tool set (bash,
+  // file ops, etc.). If the user passed harness tools, warn but continue —
+  // the SDK loop will run with SDK tools only.
+  if (input.tools && (input.tools as unknown[]).length > 0) {
+    await trace({
+      ts: new Date().toISOString(),
+      conversation_id: conversationId,
+      step: 0,
+      type: 'system',
+      content:
+        '[harness] HarnessTool[] passed to claude-sdk lane is currently ignored. ' +
+        'The SDK uses its own default tool registry. Bridging is a v0.8 follow-up.',
+      model: serializable.model,
+      provider,
+    });
+  }
+
+  // Trace input messages
+  let step = 0;
+  for (const message of serializable.messages) {
+    if (message.role === 'user' || message.role === 'system') {
+      await trace({
+        ts: new Date().toISOString(),
+        conversation_id: conversationId,
+        step,
+        type: message.role === 'user' ? 'user' : 'system',
+        role: message.role,
+        content: message.content,
+      });
+      step++;
+    }
+  }
+
+  const callStartedAt = Date.now();
+  let assembledText = '';
+  let finalUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 };
+
+  try {
+    for await (const event of runSdkProvider({
+      modelId,
+      messages: serializable.messages,
+      ...(serializable.system !== undefined ? { system: serializable.system } : {}),
+      ...(input.sandboxPath !== undefined ? { cwd: input.sandboxPath } : {}),
+    })) {
+      if (event.type === 'text') {
+        assembledText += event.delta;
+        yield event;
+      } else if (event.type === 'tool_call') {
+        await trace({
+          ts: new Date().toISOString(),
+          conversation_id: conversationId,
+          step,
+          type: 'tool_call',
+          content: { toolCallId: event.toolCallId, toolName: event.toolName, input: event.input },
+          model: serializable.model,
+          provider,
+          tools_called: [event.toolName],
+        });
+        step++;
+        yield event;
+      } else if (event.type === 'tool_result') {
+        await trace({
+          ts: new Date().toISOString(),
+          conversation_id: conversationId,
+          step,
+          type: 'tool_result',
+          content: { toolCallId: event.toolCallId, output: event.output },
+          model: serializable.model,
+          provider,
+        });
+        step++;
+        yield event;
+      } else if (event.type === 'tool_error') {
+        await trace({
+          ts: new Date().toISOString(),
+          conversation_id: conversationId,
+          step,
+          type: 'tool_result',
+          content: { toolCallId: event.toolCallId, error: event.error },
+          model: serializable.model,
+          provider,
+        });
+        step++;
+        yield event;
+      } else if (event.type === 'usage') {
+        finalUsage = {
+          inputTokens: event.usage.inputTokens,
+          outputTokens: event.usage.outputTokens,
+          cachedInputTokens: event.usage.cachedInputTokens ?? 0,
+          costUsd: event.usage.costUsd ?? 0,
+        };
+        yield event;
+      } else if (event.type === 'error') {
+        yield event;
+      }
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    await trace({
+      ts: new Date().toISOString(),
+      conversation_id: conversationId,
+      step,
+      type: 'error',
+      content: { name: error.name, message: error.message },
+      model: serializable.model,
+      provider,
+      latency_ms: Date.now() - callStartedAt,
+    });
+    await endConv({
+      conversationId,
+      startedAt,
+      endedAt: new Date(),
+      model: serializable.model,
+      messageCount: step,
+      cumulativeUsage: finalUsage,
+      status: 'aborted_error',
+      traceDir,
+    });
+    throw error;
+  }
+
+  const latencyMs = Date.now() - callStartedAt;
+
   await trace({
     ts: new Date().toISOString(),
     conversation_id: conversationId,

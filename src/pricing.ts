@@ -88,6 +88,56 @@ export const DEFAULT_RATES: Record<string, ModelRate> = {
     outputUsdPerM: 0.6,
     notes: 'Hermes 4 70B via OpenRouter',
   },
+
+  // ── Perplexity Sonar (rates as of April 2026) ───────────────────
+  // CAVEAT: Perplexity also charges per-request search fees ($5/1k requests for sonar,
+  // $5–10/1k for sonar-pro depending on context). The harness pricing schema only models
+  // per-token costs in v0.7, so search fees will silently undercount. Track real spend
+  // via Perplexity's dashboard until v0.8 introduces per-request pricing.
+  'perplexity/sonar': {
+    inputUsdPerM: 1.0,
+    outputUsdPerM: 1.0,
+    notes: 'Sonar — cheap search-grounded base. Per-request search fee NOT included',
+  },
+  'perplexity/sonar-pro': {
+    inputUsdPerM: 3.0,
+    outputUsdPerM: 15.0,
+    notes: 'Sonar Pro — larger context + multi-step search. Per-request search fee NOT included',
+  },
+  'perplexity/sonar-reasoning': {
+    inputUsdPerM: 1.0,
+    outputUsdPerM: 5.0,
+    notes: 'Sonar Reasoning — DeepSeek R1 + Perplexity search. Per-request search fee NOT included',
+  },
+  'perplexity/sonar-reasoning-pro': {
+    inputUsdPerM: 2.0,
+    outputUsdPerM: 8.0,
+    notes: 'Sonar Reasoning Pro. Per-request search fee NOT included',
+  },
+
+  // ── Claude SDK lane (same models, same per-token cost as anthropic/*) ───
+  // The claude-sdk/* lane uses @anthropic-ai/claude-agent-sdk's query() — runs in-process
+  // so per-token usage is real (unlike claude-code/* which records 0). When OAuth via
+  // Claude Max becomes legitimate again (HARNESS-PLAN.md decision 4), cost will drop to 0
+  // for subscription-auth runs and we'll need to detect that at the SDK call site.
+  'claude-sdk/claude-sonnet-4-6': {
+    inputUsdPerM: 3.0,
+    outputUsdPerM: 15.0,
+    cachedInputUsdPerM: 0.3,
+    notes: 'Sonnet 4.6 via Claude Agent SDK — same rates as anthropic/*',
+  },
+  'claude-sdk/claude-opus-4-6': {
+    inputUsdPerM: 15.0,
+    outputUsdPerM: 75.0,
+    cachedInputUsdPerM: 1.5,
+    notes: 'Opus 4.6 via Claude Agent SDK',
+  },
+  'claude-sdk/claude-haiku-4-5-20251001': {
+    inputUsdPerM: 0.8,
+    outputUsdPerM: 4.0,
+    cachedInputUsdPerM: 0.08,
+    notes: 'Haiku 4.5 via Claude Agent SDK',
+  },
 };
 
 /**

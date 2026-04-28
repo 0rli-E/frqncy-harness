@@ -29,6 +29,7 @@ export const AUTH_PROVIDERS = [
   'google',
   'openrouter',
   'chutes',
+  'perplexity',
   // Web search providers (used by web_search tool)
   'tavily',
   'brave',
@@ -41,6 +42,7 @@ export const ENV_VAR_BY_PROVIDER: Record<AuthProvider, string> = {
   google: 'GOOGLE_GENERATIVE_AI_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
   chutes: 'CHUTES_API_KEY',
+  perplexity: 'PERPLEXITY_API_KEY',
   tavily: 'TAVILY_API_KEY',
   brave: 'BRAVE_SEARCH_API_KEY',
 };

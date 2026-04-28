@@ -30,6 +30,24 @@ describe('parseModelString', () => {
     });
   });
 
+  it('parses perplexity sonar models', () => {
+    expect(parseModelString('perplexity/sonar')).toEqual({
+      provider: 'perplexity',
+      modelId: 'sonar',
+    });
+    expect(parseModelString('perplexity/sonar-reasoning')).toEqual({
+      provider: 'perplexity',
+      modelId: 'sonar-reasoning',
+    });
+  });
+
+  it('parses claude-sdk models', () => {
+    expect(parseModelString('claude-sdk/claude-sonnet-4-6')).toEqual({
+      provider: 'claude-sdk',
+      modelId: 'claude-sonnet-4-6',
+    });
+  });
+
   it('rejects unknown providers', () => {
     expect(() => parseModelString('mistral/mixtral-8x7b')).toThrow(/Unknown provider/);
   });
