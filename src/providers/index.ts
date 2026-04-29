@@ -98,6 +98,41 @@ export async function getProvider(model: ModelString): Promise<ProviderResult> {
       });
       return { model: chutes(modelId), provider, modelId };
     }
+    case 'daydreams-router': {
+      // Daydreams Router (ai.xgate.run) is OpenAI-compatible but auth is an
+      // ERC-2612 USDC permit, not an API key. We build a `fetch` wrapper via
+      // createDaydreamsRouterFetch — it does the 402 → permit → retry handshake
+      // and reuses sessions via X-Upto-Session — and pass that as the
+      // openai-compatible adapter's `fetch`. Wallet creds resolve from the
+      // harness's auth store (CDP creds preferred, viem private key fallback).
+      const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
+      const { createSigner } = await import('../wallet/index.js');
+      const { createDaydreamsRouterFetch, DEFAULT_DAYDREAMS_ROUTER_URL } = await import(
+        '../bridges/daydreams-router.js'
+      );
+
+      const signer = await createSigner();
+      // Override permit cap + deadline via env, in atomic USDC and seconds:
+      const capStr = process.env['FRQNCY_DAYDREAMS_PERMIT_CAP_ATOMIC'];
+      const deadlineStr = process.env['FRQNCY_DAYDREAMS_PERMIT_DEADLINE_SEC'];
+      const baseUrl = process.env['FRQNCY_DAYDREAMS_ROUTER_URL'] ?? DEFAULT_DAYDREAMS_ROUTER_URL;
+
+      const wrappedFetch = createDaydreamsRouterFetch({
+        signer,
+        baseUrl,
+        ...(capStr ? { permitCapAtomic: BigInt(capStr) } : {}),
+        ...(deadlineStr ? { permitDeadlineSeconds: Number(deadlineStr) } : {}),
+      });
+
+      const router = createOpenAICompatible({
+        name: 'daydreams-router',
+        baseURL: `${baseUrl.replace(/\/+$/, '')}/v1`,
+        // The OpenAI-compatible adapter forwards `fetch` to the SDK's HTTP layer
+        // when provided — viable per Vercel AI SDK v6.
+        fetch: wrappedFetch as unknown as typeof fetch,
+      });
+      return { model: router(modelId), provider, modelId };
+    }
     case 'perplexity': {
       // First-party @ai-sdk/perplexity adapter. We use this rather than the OpenAI-compatible
       // baseURL approach because Perplexity's value-add is the structured `sources` array

@@ -202,6 +202,9 @@ export async function runDoctorCommand(): Promise<void> {
     // ignore
   }
 
+  // ── Wallet + commerce (ERC-8004 + x402) ──────────────────────
+  await checkWalletAndCommerce(checks);
+
   // ── Print ────────────────────────────────────────────────────
   process.stdout.write(`\n${ANSI.bold}${ANSI.cyan}@frqncy-network/harness doctor${ANSI.reset}\n\n`);
   for (const check of checks) {
@@ -224,6 +227,111 @@ function checkCommand(displayName: string, command: string, helpText: string): C
     return { name: displayName, status: 'ok', message: out.split('\n')[0] ?? 'installed' };
   } catch {
     return { name: displayName, status: 'warn', message: `not installed (${helpText})` };
+  }
+}
+
+/**
+ * Surface ERC-8004 + x402 readiness:
+ *   - viem peer dep installed?
+ *   - @coinbase/cdp-sdk peer dep installed?
+ *   - any wallet credentials (CDP or private key) discoverable?
+ *   - which network are we on, and what are the registry / USDC addresses?
+ *
+ * All checks are non-fatal — a user who never wants to register an agent or
+ * pay an x402 endpoint shouldn't see red here. We surface 'info' when the
+ * commerce stack isn't configured, 'warn' for partial configurations, and
+ * 'ok' when both creds and the peer dep are present.
+ */
+async function checkWalletAndCommerce(checks: CheckResult[]): Promise<void> {
+  // viem peer dep
+  let viemAvailable = false;
+  try {
+    await import(/* @vite-ignore */ 'viem' as string);
+    viemAvailable = true;
+    checks.push({ name: 'viem (peer)', status: 'ok', message: 'installed' });
+  } catch {
+    checks.push({
+      name: 'viem (peer)',
+      status: 'info',
+      message: 'not installed — needed for ERC-8004 + x402 (run: npm install viem)',
+    });
+  }
+
+  // CDP SDK peer dep
+  let cdpAvailable = false;
+  try {
+    await import(/* @vite-ignore */ '@coinbase/cdp-sdk' as string);
+    cdpAvailable = true;
+    checks.push({ name: '@coinbase/cdp-sdk (peer)', status: 'ok', message: 'installed' });
+  } catch {
+    checks.push({
+      name: '@coinbase/cdp-sdk (peer)',
+      status: 'info',
+      message: 'not installed — needed for CDP wallet (run: npm install @coinbase/cdp-sdk)',
+    });
+  }
+
+  // Wallet credentials
+  try {
+    const { loadWalletCredentials, resolveNetwork, getNetworkInfo } = await import('../wallet/index.js');
+    const creds = await loadWalletCredentials();
+    const network = resolveNetwork();
+    const info = getNetworkInfo(network);
+
+    const hasCdp = !!(creds.cdpApiKeyId && creds.cdpApiKeySecret && creds.cdpWalletSecret);
+    const hasPk = !!creds.privateKey;
+
+    if (hasCdp) {
+      checks.push({
+        name: 'Wallet (CDP creds)',
+        status: cdpAvailable ? 'ok' : 'warn',
+        message: cdpAvailable
+          ? 'CDP API key + secret + wallet secret present'
+          : 'CDP creds present but @coinbase/cdp-sdk not installed',
+      });
+    } else if (hasPk) {
+      checks.push({
+        name: 'Wallet (private key)',
+        status: viemAvailable ? 'ok' : 'warn',
+        message: viemAvailable
+          ? 'FRQNCY_AGENT_PRIVATE_KEY present (viem signer)'
+          : 'private key present but viem not installed',
+      });
+    } else {
+      checks.push({
+        name: 'Wallet credentials',
+        status: 'info',
+        message:
+          'no wallet credentials configured (set CDP_API_KEY_ID/_SECRET/_WALLET_SECRET or FRQNCY_AGENT_PRIVATE_KEY)',
+      });
+    }
+
+    checks.push({
+      name: 'Network (FRQNCY_NETWORK)',
+      status: 'info',
+      message: `${network} (chainId ${info.chainId})`,
+    });
+    checks.push({
+      name: 'ERC-8004 IdentityRegistry',
+      status: 'info',
+      message: info.identityRegistry,
+    });
+    checks.push({
+      name: 'USDC contract',
+      status: 'info',
+      message: info.usdc,
+    });
+    checks.push({
+      name: 'x402 facilitator',
+      status: 'info',
+      message: info.defaultFacilitatorUrl,
+    });
+  } catch (err) {
+    checks.push({
+      name: 'Wallet check',
+      status: 'warn',
+      message: `failed: ${err instanceof Error ? err.message : String(err)}`,
+    });
   }
 }
 

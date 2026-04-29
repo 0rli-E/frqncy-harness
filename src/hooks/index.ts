@@ -35,7 +35,7 @@ import type { Usage } from '../types.js';
 // Public types
 // ────────────────────────────────────────────────────────────────────
 
-export type HookEvent = 'pre-agent' | 'post-tool-use' | 'post-agent';
+export type HookEvent = 'pre-agent' | 'post-tool-use' | 'post-agent' | 'pre-payment';
 
 export interface PreAgentContext {
   event: 'pre-agent';
@@ -66,6 +66,26 @@ export interface GuardrailEvents {
   cumulativeCostUsd: number;
 }
 
+/**
+ * Pre-payment hook context (v0.9). Fires once per outbound x402 payment
+ * attempt, before the EIP-3009/2612 signature is produced. A bash hook can
+ * `echo '{"block": true, "reason": "blocked by ops policy"}'` to stdout to
+ * veto the payment; non-blocking hooks just observe and exit cleanly.
+ *
+ * Per AGENT-COMMERCE decision 10 — keep ops/regulators in the loop with a
+ * cheap, audit-friendly seam.
+ */
+export interface PrePaymentContext {
+  event: 'pre-payment';
+  conversationId: string;
+  resource: string;
+  amountAtomic: string;
+  asset: string;
+  network: string;
+  payee: string;
+  spentSoFarAtomic: string;
+}
+
 export interface PostAgentContext {
   event: 'post-agent';
   conversationId: string;
@@ -80,7 +100,11 @@ export interface PostAgentContext {
   guardrails?: GuardrailEvents;
 }
 
-export type HookContext = PreAgentContext | PostToolUseContext | PostAgentContext;
+export type HookContext =
+  | PreAgentContext
+  | PostToolUseContext
+  | PostAgentContext
+  | PrePaymentContext;
 
 export interface HookResult {
   hookName: string;
@@ -88,6 +112,9 @@ export interface HookResult {
   success: boolean;
   warning?: string;
   error?: string;
+  /** v0.9 — pre-payment hooks may veto by writing `{"block":true,"reason":"..."}` to stdout. */
+  block?: boolean;
+  blockReason?: string;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -109,9 +136,22 @@ export const HooksConfigSchema = z
     'pre-agent': z.array(HookEntrySchema).optional(),
     'post-tool-use': z.array(HookEntrySchema).optional(),
     'post-agent': z.array(HookEntrySchema).optional(),
+    /** v0.9 — fires before each outbound x402 payment is signed. May veto. */
+    'pre-payment': z.array(HookEntrySchema).optional(),
   })
   .optional();
 export type HooksConfig = z.infer<typeof HooksConfigSchema>;
+
+/**
+ * Result of a pre-payment hook decision after consulting all registered
+ * hooks. `block: true` if any single hook returned `{ block: true }` —
+ * vetoes are first-mover-wins.
+ */
+export interface PrePaymentDecision {
+  block: boolean;
+  reason?: string;
+  results: HookResult[];
+}
 
 // ────────────────────────────────────────────────────────────────────
 // Default hooks (per Orlando's v0.5 picks)
@@ -193,6 +233,24 @@ export class HookManager {
     return results;
   }
 
+  /**
+   * v0.9 — fire all `pre-payment` hooks and return a structured veto/allow
+   * decision. First-mover-wins on `block: true`. Hook failures (non-zero
+   * exits, timeouts) do NOT block the payment by default — that's a
+   * deliberate choice so a broken hook doesn't strand the agent. If you
+   * want fail-closed behavior, write the hook to deny on uncertainty.
+   */
+  async firePrePayment(context: PrePaymentContext): Promise<PrePaymentDecision> {
+    const results = await this.fire(context);
+    const blocking = results.find((r) => r.block === true);
+    if (blocking) {
+      const decision: PrePaymentDecision = { block: true, results };
+      if (blocking.blockReason) decision.reason = blocking.blockReason;
+      return decision;
+    }
+    return { block: false, results };
+  }
+
   private async runOne(
     command: string,
     context: HookContext,
@@ -263,12 +321,18 @@ async function runShellHook(
 
       // Try to parse stdout as a structured response
       let warning: string | undefined;
+      let block: boolean | undefined;
+      let blockReason: string | undefined;
       const trimmed = stdout.trim();
       if (trimmed) {
         try {
           const parsed = JSON.parse(trimmed);
-          if (typeof parsed === 'object' && parsed !== null && typeof parsed.warning === 'string') {
-            warning = parsed.warning;
+          if (typeof parsed === 'object' && parsed !== null) {
+            if (typeof parsed.warning === 'string') warning = parsed.warning;
+            if (parsed.block === true) {
+              block = true;
+              if (typeof parsed.reason === 'string') blockReason = parsed.reason;
+            }
           }
         } catch {
           // Plain text output; treat any non-empty stdout from a non-zero-exit
@@ -287,6 +351,8 @@ async function runShellHook(
 
       const out: HookResult = { hookName: command, durationMs, success: true };
       if (warning) out.warning = warning;
+      if (block) out.block = true;
+      if (blockReason) out.blockReason = blockReason;
       resolve(out);
     });
 
@@ -339,13 +405,15 @@ async function runFunctionHook(
     ]);
 
     let warning: string | undefined;
-    if (
-      typeof result === 'object' &&
-      result !== null &&
-      'warning' in result &&
-      typeof (result as { warning?: unknown }).warning === 'string'
-    ) {
-      warning = (result as { warning: string }).warning;
+    let block: boolean | undefined;
+    let blockReason: string | undefined;
+    if (typeof result === 'object' && result !== null) {
+      const r = result as { warning?: unknown; block?: unknown; reason?: unknown };
+      if (typeof r.warning === 'string') warning = r.warning;
+      if (r.block === true) {
+        block = true;
+        if (typeof r.reason === 'string') blockReason = r.reason;
+      }
     }
 
     const out: HookResult = {
@@ -354,6 +422,8 @@ async function runFunctionHook(
       success: true,
     };
     if (warning) out.warning = warning;
+    if (block) out.block = true;
+    if (blockReason) out.blockReason = blockReason;
     return out;
   } catch (err) {
     return {

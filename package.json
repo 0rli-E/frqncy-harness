@@ -1,7 +1,7 @@
 {
   "name": "@frqncy-network/harness",
-  "version": "0.7.0-alpha.1",
-  "description": "A plug-and-play LLM harness — provider-indifferent, trace-first, never compacted.",
+  "version": "0.13.4-alpha.1",
+  "description": "A plug-and-play LLM harness — provider-indifferent, trace-first, never compacted. Now with ERC-8004 + x402 agent commerce and a Daydreams bridge.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,6 +17,22 @@
     "./trace": {
       "types": "./dist/trace.d.ts",
       "import": "./dist/trace.js"
+    },
+    "./identity": {
+      "types": "./dist/identity/index.d.ts",
+      "import": "./dist/identity/index.js"
+    },
+    "./payments": {
+      "types": "./dist/payments/index.d.ts",
+      "import": "./dist/payments/index.js"
+    },
+    "./wallet": {
+      "types": "./dist/wallet/index.d.ts",
+      "import": "./dist/wallet/index.js"
+    },
+    "./bridges": {
+      "types": "./dist/bridges/index.d.ts",
+      "import": "./dist/bridges/index.js"
     }
   },
   "bin": {
@@ -46,7 +62,12 @@
     "openai",
     "openrouter",
     "vercel-ai-sdk",
-    "frqncy"
+    "frqncy",
+    "erc-8004",
+    "x402",
+    "agent-commerce",
+    "agent-payments",
+    "trustless-agents"
   ],
   "author": "Orlando Eisenreich <orlando.eisenreich@gmail.com>",
   "license": "MIT",
@@ -69,8 +90,25 @@
     "@ai-sdk/perplexity": "^2.0.28",
     "@anthropic-ai/claude-agent-sdk": "^0.1.77",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@rollup/rollup-linux-arm64-gnu": "^4.60.2",
     "ai": "^6.0.0",
     "zod": "^3.25.76"
+  },
+  "peerDependencies": {
+    "@coinbase/cdp-sdk": "^1.0.0",
+    "@daydreamsai/core": "*",
+    "viem": "^2.21.0"
+  },
+  "peerDependenciesMeta": {
+    "viem": {
+      "optional": true
+    },
+    "@coinbase/cdp-sdk": {
+      "optional": true
+    },
+    "@daydreamsai/core": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

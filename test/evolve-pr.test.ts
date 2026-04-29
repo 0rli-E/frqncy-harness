@@ -1,0 +1,414 @@
+import { describe, it, expect } from 'vitest';
+import {
+  createPullRequest,
+  generateBranchName,
+  formatPrTitle,
+  formatCommitMessage,
+  formatPrBody,
+  extractPrUrl,
+  PROTECTED_BRANCHES,
+  type AutoPrInput,
+  type ExecFn,
+  type ExecResult,
+} from '../src/commands/evolve-pr.js';
+
+// ────────────────────────────────────────────────────────────────────
+// Pure-helper tests
+// ────────────────────────────────────────────────────────────────────
+
+describe('generateBranchName', () => {
+  it('produces an evolve/-prefixed kebab-case slug', () => {
+    const branch = generateBranchName('Tone drift on long-form content');
+    expect(branch).toMatch(/^evolve\/tone-drift-on-long-form-/);
+  });
+
+  it('caps the slug portion at 5 words and 40 chars', () => {
+    const branch = generateBranchName('one two three four five six seven eight nine ten eleven twelve');
+    // After the evolve/ prefix and 5-word cap, the slug should not exceed 40 chars + the random suffix
+    const slug = branch.slice('evolve/'.length);
+    // slug = "one-two-three-four-five-<random>"; the words alone are 22 chars + 1 dash + 6 random = 29
+    expect(slug.length).toBeLessThanOrEqual(50); // 40 cap + dash + 6 random + buffer
+  });
+
+  it('strips non-alphanumeric characters', () => {
+    const branch = generateBranchName('Foo: bar! (baz) — quux?');
+    const slug = branch.slice('evolve/'.length);
+    expect(slug).toMatch(/^[a-z0-9-]+$/);
+  });
+
+  it('falls back to "proposal" when the input has no usable words', () => {
+    const branch = generateBranchName('!!!@@@###');
+    expect(branch).toMatch(/^evolve\/proposal-/);
+  });
+
+  it('always appends a random suffix so duplicate names do not collide', () => {
+    const a = generateBranchName('same name');
+    const b = generateBranchName('same name');
+    expect(a).not.toBe(b);
+  });
+});
+
+describe('formatPrTitle', () => {
+  it('prefixes with [evolve]', () => {
+    expect(formatPrTitle('Fix the thing')).toBe('[evolve] Fix the thing');
+  });
+
+  it('caps at 70 characters of the proposal name', () => {
+    const long = 'a'.repeat(200);
+    const title = formatPrTitle(long);
+    expect(title.length).toBeLessThanOrEqual('[evolve] '.length + 70);
+  });
+
+  it('trims surrounding whitespace from the proposal name', () => {
+    expect(formatPrTitle('  hello  ')).toBe('[evolve] hello');
+  });
+});
+
+describe('formatCommitMessage', () => {
+  function makeInput(overrides: Partial<AutoPrInput> = {}): AutoPrInput {
+    return {
+      cwd: '/proj',
+      changedFiles: ['src/foo.ts'],
+      proposalName: 'Tone drift',
+      proposalMarkdown: '### 1. Tone drift\n- Pattern: bro',
+      reflectionPath: 'proposals/reflection-2026-04-28.md',
+      threadId: 'evolve-abc12345',
+      model: 'claude-sdk/claude-sonnet-4-6',
+      iterations: 3,
+      totalCostUsd: 0.0421,
+      gatesPassed: ['rubric-anchor', 'inoculation-audit', 'voice-anchor'],
+      testsPassed: true,
+      execFn: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      ...overrides,
+    };
+  }
+
+  it('starts with `evolve: <proposal name>`', () => {
+    const msg = formatCommitMessage(makeInput());
+    expect(msg.split('\n')[0]).toBe('evolve: Tone drift');
+  });
+
+  it('includes the source reflection, thread, model, iterations, cost', () => {
+    const msg = formatCommitMessage(makeInput());
+    expect(msg).toContain('Source reflection:');
+    expect(msg).toContain('Source thread: evolve-abc12345');
+    expect(msg).toContain('Agent: claude-sdk/claude-sonnet-4-6');
+    expect(msg).toContain('Iterations: 3');
+    expect(msg).toContain('Cost: $0.0421');
+  });
+
+  it('explicitly states inoculation is active and cites the paper', () => {
+    const msg = formatCommitMessage(makeInput());
+    expect(msg).toMatch(/Inoculation: active/);
+    expect(msg).toMatch(/2511\.18397/);
+  });
+
+  it('marks provenance as agent', () => {
+    const msg = formatCommitMessage(makeInput());
+    expect(msg).toMatch(/Provenance: agent/);
+  });
+
+  it('lists all passed gates', () => {
+    const msg = formatCommitMessage(makeInput());
+    expect(msg).toContain('rubric-anchor, inoculation-audit, voice-anchor');
+  });
+});
+
+describe('formatPrBody', () => {
+  function makeInput(overrides: Partial<AutoPrInput> = {}): AutoPrInput {
+    return {
+      cwd: '/proj',
+      changedFiles: ['src/foo.ts', 'src/bar.ts'],
+      proposalName: 'Tone drift',
+      proposalMarkdown: '### 1. Tone drift\n\n- **Pattern:** the model defaults to bro register',
+      reflectionPath: 'proposals/reflection-2026-04-28.md',
+      threadId: 'evolve-abc12345',
+      model: 'claude-sdk/claude-sonnet-4-6',
+      iterations: 3,
+      totalCostUsd: 0.0421,
+      gatesPassed: ['rubric-anchor', 'inoculation-audit', 'voice-anchor'],
+      testsPassed: true,
+      execFn: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      ...overrides,
+    };
+  }
+
+  it('includes the auto-generated callout at the top', () => {
+    const body = formatPrBody(makeInput());
+    expect(body).toMatch(/Auto-generated by .frqncy-harness evolve/);
+    expect(body).toMatch(/Draft only/);
+  });
+
+  it('includes structured Source, Provenance, Pre-evolve gate, Test gate, Files changed sections', () => {
+    const body = formatPrBody(makeInput());
+    expect(body).toContain('## Source');
+    expect(body).toContain('## Provenance');
+    expect(body).toContain('## Pre-evolve gate');
+    expect(body).toContain('## Test gate');
+    expect(body).toContain('## Files changed');
+    expect(body).toContain('## How to merge safely');
+  });
+
+  it('embeds the full proposal markdown verbatim', () => {
+    const body = formatPrBody(makeInput());
+    expect(body).toContain('### 1. Tone drift');
+    expect(body).toContain('the model defaults to bro register');
+  });
+
+  it('lists every changed file as a markdown bullet with backticks', () => {
+    const body = formatPrBody(makeInput());
+    expect(body).toContain('- `src/foo.ts`');
+    expect(body).toContain('- `src/bar.ts`');
+  });
+
+  it('shows ✓ for each gate that passed', () => {
+    const body = formatPrBody(makeInput());
+    expect(body).toContain('✓ rubric-anchor');
+    expect(body).toContain('✓ inoculation-audit');
+    expect(body).toContain('✓ voice-anchor');
+  });
+
+  it('renders fallback text when no gates were configured', () => {
+    const body = formatPrBody(makeInput({ gatesPassed: [] }));
+    expect(body).toMatch(/no gates configured/);
+  });
+
+  it('renders fallback text when --skip-verify was used', () => {
+    const body = formatPrBody(makeInput({ testsPassed: false }));
+    expect(body).toMatch(/skipped via .--skip-verify/);
+  });
+
+  it('cites the Anthropic reward-hacking paper', () => {
+    const body = formatPrBody(makeInput());
+    expect(body).toMatch(/2511\.18397/);
+  });
+
+  it('explicitly forbids reliance on automated gates alone', () => {
+    const body = formatPrBody(makeInput());
+    expect(body.toLowerCase()).toMatch(/review the diff manually|review.*manually/);
+  });
+});
+
+describe('extractPrUrl', () => {
+  it('extracts a github.com pull-request URL from gh stdout', () => {
+    expect(extractPrUrl('https://github.com/foo/bar/pull/42\n')).toBe(
+      'https://github.com/foo/bar/pull/42',
+    );
+  });
+
+  it('extracts the URL even when surrounded by other output', () => {
+    const stdout = `Creating draft pull request for evolve/tone-drift...\nhttps://github.com/foo/bar/pull/123\n`;
+    expect(extractPrUrl(stdout)).toBe('https://github.com/foo/bar/pull/123');
+  });
+
+  it('returns undefined when no URL is present', () => {
+    expect(extractPrUrl('something went wrong')).toBeUndefined();
+  });
+
+  it('handles enterprise github URLs', () => {
+    expect(extractPrUrl('https://github.example.com/foo/bar/pull/9')).toBe(
+      'https://github.example.com/foo/bar/pull/9',
+    );
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Integration tests (execFn seam, no real shell)
+// ────────────────────────────────────────────────────────────────────
+
+describe('createPullRequest', () => {
+  function makeBaseInput(overrides: Partial<AutoPrInput> = {}): AutoPrInput {
+    return {
+      cwd: '/proj',
+      changedFiles: ['src/foo.ts'],
+      proposalName: 'Tone drift',
+      proposalMarkdown: '### 1. Tone drift',
+      reflectionPath: 'proposals/r.md',
+      threadId: 'evolve-abc12345',
+      model: 'claude-sdk/claude-sonnet-4-6',
+      iterations: 3,
+      totalCostUsd: 0.0421,
+      gatesPassed: ['rubric-anchor', 'inoculation-audit', 'voice-anchor'],
+      testsPassed: true,
+      execFn: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      ...overrides,
+    };
+  }
+
+  function makeExecRecorder(handlers: Record<string, ExecResult>): {
+    fn: ExecFn;
+    calls: { cmd: string; args: string[] }[];
+  } {
+    const calls: { cmd: string; args: string[] }[] = [];
+    const fn: ExecFn = async (cmd, args) => {
+      calls.push({ cmd, args });
+      const key = `${cmd} ${args.slice(0, 2).join(' ')}`;
+      // Match by exact prefix
+      for (const [k, v] of Object.entries(handlers)) {
+        if (key.startsWith(k)) return v;
+      }
+      // Default to success-empty
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+    return { fn, calls };
+  }
+
+  it('returns gh_missing when gh is not installed', async () => {
+    const input = makeBaseInput({
+      execFn: async (cmd) =>
+        cmd === 'gh' ? { stdout: '', stderr: 'command not found', exitCode: 127 } : { stdout: '', stderr: '', exitCode: 0 },
+    });
+    const result = await createPullRequest(input);
+    expect(result.status).toBe('gh_missing');
+    expect(result.reason).toMatch(/cli\.github\.com/);
+  });
+
+  it('returns no_remote when there is no git remote', async () => {
+    const recorder = makeExecRecorder({
+      'gh --version': { stdout: 'gh version 2.x', stderr: '', exitCode: 0 },
+      'git remote': { stdout: '', stderr: '', exitCode: 0 },
+    });
+    const result = await createPullRequest(makeBaseInput({ execFn: recorder.fn }));
+    expect(result.status).toBe('no_remote');
+  });
+
+  it('refuses on a protected branch (main) without --yes', async () => {
+    const recorder = makeExecRecorder({
+      'gh --version': { stdout: 'gh', stderr: '', exitCode: 0 },
+      'git remote': { stdout: 'origin git@github.com:foo/bar.git (push)', stderr: '', exitCode: 0 },
+      'git branch': { stdout: 'main\n', stderr: '', exitCode: 0 },
+    });
+    const result = await createPullRequest(makeBaseInput({ execFn: recorder.fn }));
+    expect(result.status).toBe('protected_branch');
+    expect(result.reason).toMatch(/main/);
+  });
+
+  it('proceeds on a protected branch with --yes', async () => {
+    const recorder = makeExecRecorder({
+      'gh --version': { stdout: 'gh', stderr: '', exitCode: 0 },
+      'git remote': { stdout: 'origin git@github.com:foo/bar.git (push)', stderr: '', exitCode: 0 },
+      'git branch': { stdout: 'main\n', stderr: '', exitCode: 0 },
+      'git checkout': { stdout: '', stderr: '', exitCode: 0 },
+      'git add': { stdout: '', stderr: '', exitCode: 0 },
+      'git commit': { stdout: '', stderr: '', exitCode: 0 },
+      'git rev-parse': { stdout: 'deadbeef\n', stderr: '', exitCode: 0 },
+      'git push': { stdout: '', stderr: '', exitCode: 0 },
+      'gh pr': { stdout: 'https://github.com/foo/bar/pull/42\n', stderr: '', exitCode: 0 },
+    });
+    const result = await createPullRequest(makeBaseInput({ execFn: recorder.fn, yes: true }));
+    expect(result.status).toBe('opened');
+    expect(result.url).toBe('https://github.com/foo/bar/pull/42');
+  });
+
+  it('happy path on a feature branch: opens the PR and returns url + sha + branch', async () => {
+    const recorder = makeExecRecorder({
+      'gh --version': { stdout: 'gh', stderr: '', exitCode: 0 },
+      'git remote': { stdout: 'origin git@github.com:foo/bar.git (push)', stderr: '', exitCode: 0 },
+      'git branch': { stdout: 'feature/x\n', stderr: '', exitCode: 0 },
+      'git checkout': { stdout: '', stderr: '', exitCode: 0 },
+      'git add': { stdout: '', stderr: '', exitCode: 0 },
+      'git commit': { stdout: '', stderr: '', exitCode: 0 },
+      'git rev-parse': { stdout: 'abcd1234\n', stderr: '', exitCode: 0 },
+      'git push': { stdout: '', stderr: '', exitCode: 0 },
+      'gh pr': { stdout: 'https://github.com/foo/bar/pull/9\n', stderr: '', exitCode: 0 },
+    });
+    const result = await createPullRequest(makeBaseInput({ execFn: recorder.fn }));
+    expect(result.status).toBe('opened');
+    expect(result.branch).toMatch(/^evolve\//);
+    expect(result.sha).toBe('abcd1234');
+    expect(result.url).toBe('https://github.com/foo/bar/pull/9');
+  });
+
+  it('uses --draft and includes the PR title and body', async () => {
+    const recorder = makeExecRecorder({
+      'gh --version': { stdout: 'gh', stderr: '', exitCode: 0 },
+      'git remote': { stdout: 'origin git@github.com:foo/bar.git (push)', stderr: '', exitCode: 0 },
+      'git branch': { stdout: 'feature\n', stderr: '', exitCode: 0 },
+      'git rev-parse': { stdout: 'sha\n', stderr: '', exitCode: 0 },
+      'gh pr': { stdout: 'https://github.com/foo/bar/pull/1\n', stderr: '', exitCode: 0 },
+    });
+    await createPullRequest(makeBaseInput({ execFn: recorder.fn }));
+    const ghPrCall = recorder.calls.find((c) => c.cmd === 'gh' && c.args[0] === 'pr');
+    expect(ghPrCall).toBeDefined();
+    expect(ghPrCall!.args).toContain('--draft');
+    const titleIdx = ghPrCall!.args.indexOf('--title');
+    expect(titleIdx).toBeGreaterThanOrEqual(0);
+    expect(ghPrCall!.args[titleIdx + 1]).toContain('[evolve]');
+    const bodyIdx = ghPrCall!.args.indexOf('--body');
+    expect(bodyIdx).toBeGreaterThanOrEqual(0);
+    expect(ghPrCall!.args[bodyIdx + 1]).toContain('Provenance');
+  });
+
+  it('stages only the agent-changed files (not git add -A)', async () => {
+    const recorder = makeExecRecorder({
+      'gh --version': { stdout: 'gh', stderr: '', exitCode: 0 },
+      'git remote': { stdout: 'origin url', stderr: '', exitCode: 0 },
+      'git branch': { stdout: 'feature\n', stderr: '', exitCode: 0 },
+      'git rev-parse': { stdout: 'sha\n', stderr: '', exitCode: 0 },
+      'gh pr': { stdout: 'https://github.com/x/y/pull/1\n', stderr: '', exitCode: 0 },
+    });
+    await createPullRequest(
+      makeBaseInput({
+        execFn: recorder.fn,
+        changedFiles: ['src/a.ts', 'src/b.ts'],
+      }),
+    );
+    const addCall = recorder.calls.find((c) => c.cmd === 'git' && c.args[0] === 'add');
+    expect(addCall).toBeDefined();
+    expect(addCall!.args).toContain('--');
+    expect(addCall!.args).toContain('src/a.ts');
+    expect(addCall!.args).toContain('src/b.ts');
+    // Never `git add -A` or `git add .`
+    expect(addCall!.args).not.toContain('-A');
+    expect(addCall!.args).not.toContain('.');
+  });
+
+  it('returns failed when git push errors out', async () => {
+    const recorder = makeExecRecorder({
+      'gh --version': { stdout: 'gh', stderr: '', exitCode: 0 },
+      'git remote': { stdout: 'origin url', stderr: '', exitCode: 0 },
+      'git branch': { stdout: 'feature\n', stderr: '', exitCode: 0 },
+      'git rev-parse': { stdout: 'sha\n', stderr: '', exitCode: 0 },
+      'git push': { stdout: '', stderr: 'permission denied', exitCode: 128 },
+    });
+    const result = await createPullRequest(makeBaseInput({ execFn: recorder.fn }));
+    expect(result.status).toBe('failed');
+    expect(result.reason).toMatch(/permission denied/);
+  });
+
+  it('returns failed when there is nothing to commit', async () => {
+    const recorder = makeExecRecorder({
+      'gh --version': { stdout: 'gh', stderr: '', exitCode: 0 },
+      'git remote': { stdout: 'origin url', stderr: '', exitCode: 0 },
+      'git branch': { stdout: 'feature\n', stderr: '', exitCode: 0 },
+      'git commit': { stdout: 'nothing to commit, working tree clean', stderr: '', exitCode: 1 },
+    });
+    const result = await createPullRequest(makeBaseInput({ execFn: recorder.fn }));
+    expect(result.status).toBe('failed');
+    expect(result.reason).toMatch(/no changes to commit/i);
+  });
+
+  it('returns failed-with-branch+sha when push succeeded but gh pr create failed', async () => {
+    const recorder = makeExecRecorder({
+      'gh --version': { stdout: 'gh', stderr: '', exitCode: 0 },
+      'git remote': { stdout: 'origin url', stderr: '', exitCode: 0 },
+      'git branch': { stdout: 'feature\n', stderr: '', exitCode: 0 },
+      'git rev-parse': { stdout: 'abc123\n', stderr: '', exitCode: 0 },
+      'gh pr': { stdout: '', stderr: 'authentication required', exitCode: 1 },
+    });
+    const result = await createPullRequest(makeBaseInput({ execFn: recorder.fn }));
+    expect(result.status).toBe('failed');
+    expect(result.branch).toMatch(/^evolve\//);
+    expect(result.sha).toBe('abc123');
+    expect(result.reason).toMatch(/authentication required/);
+  });
+});
+
+describe('PROTECTED_BRANCHES constant', () => {
+  it('includes the standard production-ish branch names', () => {
+    expect(PROTECTED_BRANCHES).toContain('main');
+    expect(PROTECTED_BRANCHES).toContain('master');
+    expect(PROTECTED_BRANCHES).toContain('develop');
+    expect(PROTECTED_BRANCHES).toContain('production');
+  });
+});

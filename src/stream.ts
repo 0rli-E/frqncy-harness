@@ -126,6 +126,7 @@ export async function* stream(input: ChatInput): AsyncGenerator<StreamEvent, voi
   const toolContext: ToolContext = {
     conversationId,
     cwd: input.sandboxPath ?? process.cwd(),
+    ...(input.toolFetch ? { fetch: input.toolFetch as typeof fetch } : {}),
   };
 
   const aiSdkTools = hasTools ? toAiSdkToolSet(tools, toolContext, approvalManager.asCallback()) : undefined;

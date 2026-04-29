@@ -41,12 +41,16 @@ export const webFetchTool: HarnessTool<WebFetchInput, WebFetchOutput> = {
   inputSchema: WebFetchInputSchema,
   flags: { untrustedContent: true, outboundNetwork: true },
   permission: 'auto',
-  execute: async ({ url, method, timeout_ms, headers }) => {
+  execute: async ({ url, method, timeout_ms, headers }, ctx) => {
     const startMs = Date.now();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout_ms ?? 20_000);
+    // v0.13.4 — when the agent loop has injected a payment-aware fetch via
+    // ToolContext, route through it so 402 responses get auto-paid. Falls
+    // through to the global `fetch` in the absence of that injection.
+    const fetchImpl = ctx?.fetch ?? fetch;
     try {
-      const res = await fetch(url, {
+      const res = await fetchImpl(url, {
         method: method ?? 'GET',
         headers: {
           'User-Agent': '@frqncy-network/harness/0.4 (https://github.com/0rli-E/frqncy-harness)',

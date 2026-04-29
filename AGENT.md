@@ -23,6 +23,8 @@ These are NOT up for re-debate during normal work. If you think one is wrong, wr
 9. **Full Anthropic external-artifacts pattern** in `agent` mode (`init.sh` + `progress.md` + `tasks.json` + baseline git)
 10. **Cost guardrails:** $5 soft warn / $25 hard abort per conversation, configurable
 11. **Hermes Agent as the daemon shell** — the harness is packaged as a Hermes skill for multi-platform deployment, NOT built as a daemon itself
+12. **Agent commerce: ERC-8004 + x402 on Base mainnet, CDP smart wallets default** (v0.9). Pluggable Signer interface (`cdp` adapter primary, `viem` private-key fallback). x402 v1 wire format with types parameterized for v2. Payments live at HTTP first (fetch wrapper + server middleware); the LLM-callable `pay` tool is opt-in and `propose-then-approve`. Validation Registry deferred. AP2 declared as a capability in `card.capabilities.extensions[]`, not implemented as wire protocol. Full design in `proposals/AGENT-COMMERCE.md`.
+13. **Daydreams interop is a bridge, not a fusion** (v0.9.1). `src/bridges/daydreams.ts` provides bidirectional adapters: `harnessToolToDaydreamsAction` lifts harness tools (with permission gating intact) into Daydreams agents, `daydreamsActionToHarnessTool` lifts Daydreams plugins into harness loops. We do NOT bundle `@daydreamsai/core` — it's a peer dep. `src/bridges/daydreams-router.ts` adds the Daydreams Router (`ai.xgate.run`) as a paid OpenAI-compatible inference lane via ERC-2612 USDC permits. Per s4mmy's framing: "service integration + payments is the bottleneck, not model quality" — so privilege payment-rail breadth over marginal model selection logic. Full research in `proposals/research/s4mmy-and-daydreams-router.md`.
 
 Full plan: `../proposals/HARNESS-PLAN.md`. Full defaults review: `../proposals/HARNESS-DEFAULTS-REVIEW.md`.
 
@@ -48,6 +50,9 @@ The decision trace JSONL is the moat. Treat it as append-only, never modify past
 - **Don't build a daemon.** Hermes Agent is the daemon shell. (Decision 11.)
 - **Don't bake retrieval into the harness.** Retrieval lives in MCP servers. (Section F.)
 - **Don't add framework-style abstractions** (chains, supervisors, multi-agent orchestrators). One linear agent + one shared trace + one bundled compression model when needed. (Per Cognition's "Don't Build Multi-Agents.")
+- **Don't expose `pay` as an auto-permission tool.** The LLM having a "spend money" verb deserves friction; `pay` is `propose-then-approve` and opt-in. Same logic for `pre-payment` hook — keep ops/regulators in the loop. (Per AGENT-COMMERCE decision 7.)
+- **Don't put wallet keys in the LLM context.** Ever. The harness signs internally and surfaces only the result.
+- **Don't auto-write reputation feedback** after every settlement. ChaosChain does it; we don't, by default. Toggle-on after we have a track record. (Per AGENT-COMMERCE decision 11.)
 
 ## When you finish a task
 

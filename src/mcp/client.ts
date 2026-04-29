@@ -22,14 +22,35 @@ export interface McpToolDescriptor {
   inputJsonSchema: unknown;
 }
 
+/**
+ * v0.13.5 — relaxed `transport` type. The MCP SDK exposes three concrete
+ * transport classes (`StdioClientTransport`, `StreamableHTTPClientTransport`,
+ * `SSEClientTransport`). They share a common interface — `start()`, `close()`,
+ * `send()` — but TypeScript doesn't expose that union directly. We accept any
+ * object with a `close(): Promise<void>` method, which is all this module
+ * cares about.
+ */
+type AnyMcpTransport = {
+  close(): Promise<void>;
+};
+
 export interface ConnectedMcpServer {
   name: string;
   entry: McpServerEntry;
   client: Client;
-  transport: StdioClientTransport;
+  transport: AnyMcpTransport;
   tools: McpToolDescriptor[];
   /** Disconnect this server cleanly */
   disconnect: () => Promise<void>;
+}
+
+/**
+ * Optional connection-time options. v0.13.5+: `fetch` flows through to the
+ * HTTP/SSE transports so paid MCP servers can auto-pay 402 responses under
+ * the agent run's wallet + budget + hook plumbing.
+ */
+export interface ConnectMcpServerOptions {
+  fetch?: typeof fetch;
 }
 
 export interface ConnectMcpServersResult {
@@ -47,14 +68,45 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 export async function connectMcpServer(
   name: string,
   entry: McpServerEntry,
+  options: ConnectMcpServerOptions = {},
 ): Promise<ConnectedMcpServer> {
   const timeoutMs = entry._harness?.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
 
-  const transport = new StdioClientTransport({
-    command: entry.command,
-    args: entry.args ?? [],
-    env: entry.env ? { ...process.env, ...entry.env } as Record<string, string> : (process.env as Record<string, string>),
-  });
+  // Resolve transport kind. Schema enforces command XOR url.
+  const transportKind: 'stdio' | 'streamable-http' | 'sse' =
+    entry.transport ?? (entry.url ? 'streamable-http' : 'stdio');
+
+  let transport: AnyMcpTransport;
+  if (transportKind === 'stdio') {
+    if (!entry.command) {
+      throw new Error(`MCP server '${name}': stdio transport requires \`command\``);
+    }
+    transport = new StdioClientTransport({
+      command: entry.command,
+      args: entry.args ?? [],
+      env: entry.env ? { ...process.env, ...entry.env } as Record<string, string> : (process.env as Record<string, string>),
+    });
+  } else if (transportKind === 'streamable-http') {
+    if (!entry.url) {
+      throw new Error(`MCP server '${name}': streamable-http transport requires \`url\``);
+    }
+    const { StreamableHTTPClientTransport } = await import(
+      '@modelcontextprotocol/sdk/client/streamableHttp.js'
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = {};
+    if (options.fetch) opts.fetch = options.fetch;
+    transport = new StreamableHTTPClientTransport(new URL(entry.url), opts);
+  } else {
+    if (!entry.url) {
+      throw new Error(`MCP server '${name}': sse transport requires \`url\``);
+    }
+    const { SSEClientTransport } = await import('@modelcontextprotocol/sdk/client/sse.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = {};
+    if (options.fetch) opts.fetch = options.fetch;
+    transport = new SSEClientTransport(new URL(entry.url), opts);
+  }
 
   const client = new Client(
     { name: '@frqncy-network/harness', version: '0.4.0' },
@@ -66,7 +118,11 @@ export async function connectMcpServer(
   // leak file descriptors. Repeated MCP connect attempts in a long-running
   // session would eventually exhaust FDs.
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const connectPromise = client.connect(transport);
+  // Cast through `unknown` because the AnyMcpTransport union only narrows on
+  // close(); the SDK's internal Transport requires start()+send() too. The
+  // three concrete transports (Stdio/StreamableHTTP/SSE) all implement those.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const connectPromise = client.connect(transport as any);
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutHandle = setTimeout(
       () => reject(new Error(`MCP server '${name}' connect timeout after ${timeoutMs}ms`)),
@@ -117,9 +173,10 @@ export async function connectMcpServer(
  */
 export async function connectMcpServers(
   servers: Array<{ name: string; entry: McpServerEntry }>,
+  options: ConnectMcpServerOptions = {},
 ): Promise<ConnectMcpServersResult> {
   const results = await Promise.allSettled(
-    servers.map(({ name, entry }) => connectMcpServer(name, entry)),
+    servers.map(({ name, entry }) => connectMcpServer(name, entry, options)),
   );
 
   const connected: ConnectedMcpServer[] = [];

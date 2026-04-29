@@ -62,6 +62,11 @@ export interface ReplCommandOptions {
   maxSteps?: number;
   /** Skip sandbox creation; agent operates in current cwd. Only meaningful with --agent. */
   noSandbox?: boolean;
+  /**
+   * v0.13.2 — when true, install `pay` + `discover_agents` HarnessTools so
+   * the LLM can transact mid-REPL. Off by default. Only meaningful with --agent.
+   */
+  payments?: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -88,6 +93,46 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
   let yolo = options.yolo === true;
   const maxSteps = options.maxSteps ?? 20;
 
+  // ── Payments (v0.13.2/4/5 — resolved BEFORE MCP so the wrapped fetch
+  // can be passed into HTTP/SSE MCP transports too) ────────────
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let paymentTools: HarnessTool<any, any>[] = [];
+  let toolFetch: typeof fetch | undefined;
+  if (toolsEnabled && options.payments === true) {
+    try {
+      const { createSigner } = await import('../wallet/index.js');
+      const { createPaymentToolset, wrapFetchWithPayment } = await import('../payments/index.js');
+      const { HookManager } = await import('../hooks/index.js');
+      // Mint a conversationId at install time so trace/hook plumbing has a stable id.
+      if (!conversationId) {
+        conversationId = randomUUID();
+      }
+      const signer = await createSigner();
+      const hookManager = new HookManager(config.hooks);
+      const startedAt = new Date();
+      const toolset = createPaymentToolset({
+        signer,
+        traceContext: { conversationId, startedAt },
+        hookManager,
+      });
+      paymentTools = [toolset.pay, toolset.discoverAgents];
+      toolFetch = wrapFetchWithPayment({
+        signer,
+        acceptedNetworks: [signer.network],
+        traceContext: { conversationId, startedAt },
+        hookManager,
+      });
+      output.write(
+        `${ANSI.dim}  ${ANSI.green}✓${ANSI.dim} payments: pay + discover_agents + auto-pay web_fetch + paid MCP (network=${signer.network}, signer=${signer.kind})${ANSI.reset}\n`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      output.write(
+        `${ANSI.yellow}  ! payments unavailable: ${msg}${ANSI.reset}\n`,
+      );
+    }
+  }
+
   // ── Sandbox + MCP setup (only if agent mode) ──────────────
   let sandbox: Sandbox | null = null;
   let sandboxPath: string | undefined;
@@ -108,12 +153,12 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
       output.write(`${ANSI.dim}sandbox: ${sandbox.backend} @ ${sandbox.path}${ANSI.reset}\n`);
     }
 
-    // MCP servers
+    // MCP servers — pass the wrapped fetch so HTTP/SSE transports auto-pay 402s
     const mcpConfig = await loadMcpConfig();
     const mcpServerEntries = getEnabledServers(mcpConfig);
     if (mcpServerEntries.length > 0) {
       output.write(`${ANSI.dim}connecting to ${mcpServerEntries.length} MCP server(s)...${ANSI.reset}\n`);
-      mcpResult = await connectMcpServers(mcpServerEntries);
+      mcpResult = await connectMcpServers(mcpServerEntries, toolFetch ? { fetch: toolFetch } : {});
       for (const s of mcpResult.servers) {
         output.write(`${ANSI.dim}  ${ANSI.green}✓${ANSI.dim} ${s.name} (${s.tools.length} tools)${ANSI.reset}\n`);
       }
@@ -300,7 +345,7 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
       let usage: Usage | undefined;
 
       // Build tools array (agent mode only)
-      const turnTools = toolsEnabled ? [...DEFAULT_TOOLS, ...mcpTools] : undefined;
+      const turnTools = toolsEnabled ? [...DEFAULT_TOOLS, ...mcpTools, ...paymentTools] : undefined;
 
       try {
         for await (const event of stream({
@@ -311,6 +356,7 @@ export async function runReplCommand(options: ReplCommandOptions): Promise<void>
           ...(options.threadId ? { threadId: options.threadId } : {}),
           ...(options.projectId ? { projectId: options.projectId } : {}),
           ...(turnTools ? { tools: turnTools } : {}),
+          ...(toolFetch ? { toolFetch } : {}),
           ...(toolsEnabled ? { maxSteps } : {}),
           ...(toolsEnabled && sandboxPath ? { sandboxPath } : {}),
           ...(toolsEnabled && !yolo ? { approval: approvalCallback } : {}),

@@ -50,6 +50,15 @@ export interface ToolContext {
   sandbox?: Sandbox;
   /** Optional logger — if provided, tools should write structured info here */
   log?: (event: { level: 'debug' | 'info' | 'warn' | 'error'; message: string; data?: unknown }) => void;
+  /**
+   * v0.13.4 — optional fetch override. When set, network-using tools
+   * (web_fetch, web_search, future MCP-HTTP) should route through this
+   * instead of the global `fetch`. The agent loop injects an x402-paying
+   * fetch here when `--payments` is on so 402'd resources get paid
+   * transparently — no LLM-callable `pay` tool needed for in-band payments
+   * during a normal web_fetch flow.
+   */
+  fetch?: typeof fetch;
 }
 
 export interface HarnessTool<TInput = unknown, TOutput = unknown> {

@@ -36,7 +36,23 @@ export const TRACE_SCHEMA_VERSION = '0.1.0';
  * Perplexity is a search-grounded LLM provider (sonar family). Returns structured `sources`
  * alongside text via the @ai-sdk/perplexity adapter. Wired in v0.7 as the search-grounded lane.
  */
-export const API_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter', 'chutes', 'perplexity'] as const;
+export const API_PROVIDERS = [
+  'anthropic',
+  'openai',
+  'google',
+  'openrouter',
+  'chutes',
+  'perplexity',
+  /**
+   * Daydreams Router (`ai.xgate.run`) — x402-paid OpenAI-compatible inference.
+   * Auth is an ERC-2612 USDC permit, not an API key. The harness's CDP signer
+   * (or viem private-key fallback) signs once; sessions accumulate spend under
+   * the router's `X-Upto-Session` until the cap or idle timeout. Model IDs use
+   * the router's `provider:model` convention (e.g. `anthropic:claude-sonnet-4-6`),
+   * so a full harness model string looks like `daydreams-router/anthropic:claude-sonnet-4-6`.
+   */
+  'daydreams-router',
+] as const;
 export const SUBSCRIPTION_PROVIDERS = ['claude-code', 'codex'] as const;
 export const SDK_PROVIDERS = ['claude-sdk'] as const;
 export const PROVIDERS = [...API_PROVIDERS, ...SUBSCRIPTION_PROVIDERS, ...SDK_PROVIDERS] as const;
@@ -97,8 +113,41 @@ export const TraceRecordTypeSchema = z.enum([
   'reflection',
   'error',
   'system',
+  /** v0.9 — x402 payment settlement record. Append-only. */
+  'payment',
 ]);
 export type TraceRecordType = z.infer<typeof TraceRecordTypeSchema>;
+
+/**
+ * Body shape carried in a `payment`-type trace record's `content` field.
+ *
+ * Captures one settled (or attempted) x402 settlement so the never-compacted
+ * trace becomes the audit log for outbound + inbound spend. Independent of
+ * the LLM cost cap — `costUsd` is for token usage, this is on-chain transfer.
+ *
+ * `direction: 'out'` — the harness paid an external resource.
+ * `direction: 'in'`  — another agent paid the harness's monetized endpoint.
+ */
+export const PaymentTraceBodySchema = z.object({
+  direction: z.enum(['out', 'in']),
+  resource: z.string(),
+  amountAtomic: z.string().regex(/^\d+$/),
+  asset: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  network: z.string(),
+  txHash: z.string().optional(),
+  payer: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  payee: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  facilitator: z.string().optional(),
+  /** Budget-trigger snapshot at the time of payment ('none', 'soft', 'hard'). */
+  triggered: z.enum(['none', 'soft', 'hard']).optional(),
+  /** Whether settlement actually succeeded (false = attempt logged but failed). */
+  settled: z.boolean(),
+  /** Server-emitted error reason when settled is false. */
+  errorReason: z.string().optional(),
+  /** Permit-vs-exact scheme tag for forward-compat. */
+  scheme: z.enum(['exact', 'permit']).optional(),
+});
+export type PaymentTraceBody = z.infer<typeof PaymentTraceBodySchema>;
 
 export const UsageSchema = z.object({
   inputTokens: z.number().int().nonnegative(),
@@ -209,6 +258,13 @@ export interface ChatInput extends z.infer<typeof ChatInputSchema> {
   hooksConfig?: unknown;
   /** Whether to apply bundled default hooks when no explicit hooksConfig given. CLI passes true; programmatic users default false. */
   useDefaultHooks?: boolean;
+  /**
+   * v0.13.4 — optional fetch override pushed into every tool's ToolContext.
+   * The agent loop with --payments builds an x402-paying fetch and passes it
+   * here so web_fetch (and other network-using tools) auto-pay 402'd
+   * resources without the LLM having to invoke the `pay` tool explicitly.
+   */
+  toolFetch?: typeof fetch;
 }
 
 export interface ChatResult {

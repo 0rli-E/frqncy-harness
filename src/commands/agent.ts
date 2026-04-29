@@ -53,6 +53,13 @@ export interface AgentCommandOptions {
   noArtifacts?: boolean;
   threadId?: string;
   projectId?: string;
+  /**
+   * v0.13.2 — when true, install `pay` + `discover_agents` HarnessTools so the
+   * LLM can transact. Wallet creds resolve from the auth store; the run's
+   * conversationId + HookManager + (config-opt-in) auto-feedback writer get
+   * threaded through automatically. Off by default — payments are real money.
+   */
+  payments?: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -74,6 +81,10 @@ export async function runAgentCommand(prompt: string, options: AgentCommandOptio
   const config = await loadConfig();
   const model = (options.model ?? config.defaultModel) as ModelString;
   const maxSteps = options.maxSteps ?? 20;
+  // Pre-mint the conversation id so payments + traces share the same one.
+  // stream() honors `conversationId` when provided.
+  const conversationId = randomUUID();
+  const startedAt = new Date();
 
   // ── Sandbox ────────────────────────────────────────────────
   let sandbox: Sandbox | null = null;
@@ -96,6 +107,42 @@ export async function runAgentCommand(prompt: string, options: AgentCommandOptio
     output.write(`${ANSI.dim}artifacts: progress.md + tasks.json + .frqncy-harness/init.sh${ANSI.reset}\n`);
   }
 
+  // ── Payments (v0.13.2 — opt-in, resolved BEFORE MCP so the wrapped fetch
+  // can be threaded into HTTP/SSE MCP transports too) ────────────
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const paymentTools: HarnessTool<any, any>[] = [];
+  let toolFetch: typeof fetch | undefined;
+  if (options.payments === true) {
+    try {
+      const { createSigner } = await import('../wallet/index.js');
+      const { createPaymentToolset, wrapFetchWithPayment } = await import('../payments/index.js');
+      const { HookManager } = await import('../hooks/index.js');
+      const signer = await createSigner();
+      const hookManager = new HookManager(config.hooks);
+      const toolset = createPaymentToolset({
+        signer,
+        traceContext: { conversationId, startedAt },
+        hookManager,
+      });
+      paymentTools.push(toolset.pay, toolset.discoverAgents);
+      toolFetch = wrapFetchWithPayment({
+        signer,
+        acceptedNetworks: [signer.network],
+        traceContext: { conversationId, startedAt },
+        hookManager,
+      });
+      output.write(
+        `${ANSI.dim}payments: ${ANSI.green}✓${ANSI.dim} pay + discover_agents + auto-pay web_fetch + paid MCP (network=${signer.network}, signer=${signer.kind})${ANSI.reset}\n`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      output.write(
+        `${ANSI.yellow}! payments unavailable: ${msg}${ANSI.reset}\n` +
+          `${ANSI.dim}  configure with: frqncy-harness auth set cdp-api-key-id …, or set FRQNCY_AGENT_PRIVATE_KEY${ANSI.reset}\n`,
+      );
+    }
+  }
+
   // ── MCP servers (decision D1) ──────────────────────────────
   const mcpConfig = await loadMcpConfig();
   const mcpServerEntries = getEnabledServers(mcpConfig);
@@ -104,7 +151,10 @@ export async function runAgentCommand(prompt: string, options: AgentCommandOptio
   const mcpTools: HarnessTool<any, any>[] = [];
   if (mcpServerEntries.length > 0) {
     output.write(`${ANSI.dim}connecting to ${mcpServerEntries.length} MCP server(s)...${ANSI.reset}\n`);
-    mcpResult = await connectMcpServers(mcpServerEntries);
+    // v0.13.5 — pass the wrapped fetch so HTTP/SSE MCP transports auto-pay
+    // 402'd MCP servers under the same wallet + budget + hook plumbing as
+    // every other tool. Stdio servers ignore it.
+    mcpResult = await connectMcpServers(mcpServerEntries, toolFetch ? { fetch: toolFetch } : {});
     for (const s of mcpResult.servers) {
       output.write(`${ANSI.dim}  ${ANSI.green}✓${ANSI.dim} ${s.name} (${s.tools.length} tools)${ANSI.reset}\n`);
     }
@@ -139,9 +189,11 @@ export async function runAgentCommand(prompt: string, options: AgentCommandOptio
   output.write(`${ANSI.bold}${ANSI.cyan}@frqncy-network/harness agent${ANSI.reset} ${ANSI.dim}(model=${model}, maxSteps=${maxSteps})${ANSI.reset}\n`);
   output.write('\n');
 
+  // (Payments resolved earlier — see the block above MCP-server connect.)
+
   let aborted = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const allTools: HarnessTool<any, any>[] = [...DEFAULT_TOOLS, ...mcpTools];
+  const allTools: HarnessTool<any, any>[] = [...DEFAULT_TOOLS, ...mcpTools, ...paymentTools];
   try {
     for await (const event of stream({
       model,
@@ -150,6 +202,7 @@ export async function runAgentCommand(prompt: string, options: AgentCommandOptio
       tools: allTools,
       maxSteps,
       sandboxPath,
+      conversationId,
       ...(approval ? { approval } : {}),
       yolo: options.yolo === true,
       costCap: { softWarnUsd: config.costCap.softWarnUsd, hardAbortUsd: config.costCap.hardAbortUsd },
@@ -157,6 +210,7 @@ export async function runAgentCommand(prompt: string, options: AgentCommandOptio
       ...(config.hooks !== undefined ? { hooksConfig: config.hooks } : {}),
       ...(options.threadId ? { threadId: options.threadId } : {}),
       ...(options.projectId ? { projectId: options.projectId } : {}),
+      ...(toolFetch ? { toolFetch } : {}),
       useDefaultHooks: true,
     })) {
       switch (event.type) {

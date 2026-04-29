@@ -50,13 +50,46 @@ export type HarnessExtensions = z.infer<typeof HarnessExtensionsSchema>;
 // Single server entry — matches Claude Desktop's shape
 // ────────────────────────────────────────────────────────────────────
 
-export const McpServerSchema = z.object({
-  command: z.string().describe('Executable to spawn (e.g. "npx", "node", "python")'),
-  args: z.array(z.string()).optional().describe('Args passed to command'),
-  env: z.record(z.string(), z.string()).optional().describe('Environment variables'),
-  // Harness-only extension namespace
-  _harness: HarnessExtensionsSchema.optional(),
-});
+/**
+ * MCP server entry — supports three transports:
+ *
+ *   1. **stdio** (default, Claude Desktop-compatible): set `command` (+ args + env).
+ *      The harness spawns the subprocess and talks JSON-RPC over its pipes.
+ *
+ *   2. **streamable-http** (v0.13.5+): set `url` to an HTTPS endpoint and the
+ *      harness will use `StreamableHTTPClientTransport`. When the agent loop has
+ *      a payment-wrapped fetch, this transport receives it via the `fetch`
+ *      option, so 402'd MCP servers auto-pay under the harness's wallet +
+ *      budget + hook plumbing.
+ *
+ *   3. **sse** (v0.13.5+): set `url` AND `transport: 'sse'`. Older servers may
+ *      only expose SSE; the harness uses `SSEClientTransport` instead. Same
+ *      paying-fetch wiring.
+ *
+ * `command` and `url` are mutually exclusive — exactly one must be set.
+ */
+export const McpServerSchema = z
+  .object({
+    // Stdio (Claude Desktop shape)
+    command: z
+      .string()
+      .optional()
+      .describe('Executable to spawn (e.g. "npx", "node", "python") — stdio transport'),
+    args: z.array(z.string()).optional().describe('Args passed to command'),
+    env: z.record(z.string(), z.string()).optional().describe('Environment variables'),
+    // HTTP / SSE
+    url: z.string().url().optional().describe('Endpoint for streamable-http or sse transport'),
+    transport: z
+      .enum(['stdio', 'streamable-http', 'sse'])
+      .optional()
+      .describe('Transport to use. Defaults to stdio if `command` is set, streamable-http if `url` is set.'),
+    // Harness-only extension namespace
+    _harness: HarnessExtensionsSchema.optional(),
+  })
+  .refine(
+    (e) => (e.command !== undefined) !== (e.url !== undefined),
+    { message: 'McpServerEntry: exactly one of `command` (stdio) or `url` (http/sse) must be set' },
+  );
 export type McpServerEntry = z.infer<typeof McpServerSchema>;
 
 // ────────────────────────────────────────────────────────────────────

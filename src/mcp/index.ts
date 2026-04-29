@@ -26,6 +26,7 @@ export {
   type McpToolDescriptor,
   type ConnectedMcpServer,
   type ConnectMcpServersResult,
+  type ConnectMcpServerOptions,
 } from './client.js';
 
 export {

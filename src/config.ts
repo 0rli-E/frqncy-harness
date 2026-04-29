@@ -12,6 +12,7 @@ import { join, dirname } from 'node:path';
 import { z } from 'zod';
 import { ModelStringSchema } from './types.js';
 import { HooksConfigSchema } from './hooks/index.js';
+import { AutoFeedbackConfigSchema } from './payments/feedback.js';
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), '.frqncy-harness', 'config.json');
 
@@ -56,6 +57,19 @@ export const ConfigSchema = z.object({
    * See src/hooks/index.ts for full type docs and bundled hook references.
    */
   hooks: HooksConfigSchema,
+
+  /**
+   * x402 payment subsystem config (v0.13+). All fields optional, defaults
+   * are inert (autoFeedback disabled). Per AGENT-COMMERCE decision 11,
+   * reputation auto-write is opt-in because it spends gas + writes on-chain
+   * noise.
+   */
+  payments: z
+    .object({
+      /** ERC-8004 reputation feedback after every settled outbound payment. */
+      autoFeedback: AutoFeedbackConfigSchema.default({}),
+    })
+    .default({}),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
