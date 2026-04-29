@@ -269,7 +269,53 @@ createServer(async (req, res) => {
 - ✅ Total **412 passing**.
 - ✅ Exports: `createPullRequest`, `generateBranchName`, `formatPrTitle`, `formatCommitMessage`, `formatPrBody`, `extractPrUrl`, `PROTECTED_BRANCHES`, plus types
 
-### v0.13.4-alpha.1 (this release — `frqncy --show <slug>` inspects one persona)
+### v0.14.3-alpha.1 (this release — reflections inspector + actions extractor)
+- ✅ **`frqncy-harness frqncy --reflections`** lists every saved reflection from `proposals/reflections/` with action-item counts (open / done), records reviewed, model, cost, file size, corpus list. Sorted by date desc. Pure read of the filesystem.
+- ✅ **`frqncy-harness frqncy --actions`** is the bridge from reflection → action: extracts every checkbox action item across all reflections, defaults to **open-only**, groups by reflection date. `--include-done` shows completed items too. The org sees what it told itself to do.
+- ✅ **`parseReflection(raw, slug, path)`** — exported parser. Extracts `ReflectionRecord` with date, recordsReviewed, model, costUsd, dateRange, corpus[], body, **actionItems[] with done/text**, fileBytes. Symmetric inverse of how `runFrqncyReflectCommand` writes the file.
+- ✅ **`loadReflections(dir)`** — reads every `.md` in the reflections dir, parses each, sorts by date desc. Tolerant: ENOENT → `[]`, unparseable → silently skipped.
+- ✅ **`runFrqncyActionsCommand`** returns `ActionItemEntry[]` — each item carries its parent `reflectionSlug` + `reflectionDate` so you can trace any to-do back to the reflection that generated it.
+- ✅ JSON mode emits structured arrays for piping into `jq`, building a status dashboard, or feeding into the next reflection cycle (the org learning from its own action backlog).
+- ✅ The full FRQNCY OS inspection surface is now seven prompt-free commands plus two LLM-using commands. Every artifact class — personas, history, deliberations, reflections, actions — is first-class addressable.
+- ✅ 17 new tests; total **891 passing**.
+- ✅ Exports: `parseReflection`, `loadReflections`, `runFrqncyReflectionsCommand`, `runFrqncyActionsCommand`, `ReflectionRecord`, `ReflectionActionItem`, `ActionItemEntry`, `FrqncyReflectionsOptions`, `FrqncyActionsOptions`.
+
+### v0.14.2-alpha.1 (cross-deliberation reflection)
+- ✅ **`frqncy-harness frqncy --reflect`** is the first LLM-using primitive in the v0.14.x family. Reads the N most-recent deliberation files, builds a compact summary corpus, asks the model (default `claude-sonnet-4-6`) to surface themes, routing patterns, voice signals, action items, and open questions. Single LLM call — no fan-out.
+- ✅ The reflection persona is the **Learning Agent** — the meta-tier sibling that already exists in FRQNCY OS. Every reflection is tagged `thread=frqncy-os/learning-agent`, `project=frqncy-os`, so cross-reflection patterns (the org learning how it learns) are queryable via `gain` / `costs` / `traces`.
+- ✅ **`--save`** writes the reflection to `proposals/reflections/<date>-deliberation-reflection.md` with provenance header (records reviewed, date range, model, cost, corpus list). **`--output <path>`** overrides the destination.
+- ✅ **`--last N`** caps the corpus (default 10). **`--since YYYY-MM-DD`** filters by date.
+- ✅ **`summarizeDeliberation(record)`** — pure function that builds a one-paragraph summary of one record (synthesis truncated to ~400 chars, members listed with cost + body byte count). Used by the prompt builder; testable without an LLM.
+- ✅ **`buildReflectionPrompt(records, generatedAt)`** — pure function that constructs the full prompt (corpus + task statement). Tests assert structure without burning tokens.
+- ✅ **`REFLECT_SYSTEM_PROMPT`** — exported constant. Includes the inoculation invariant. Hard rules: no fluff, cite slugs in italics, never invent themes from a too-small corpus, never call a single occurrence a "pattern."
+- ✅ Closes the self-improvement loop at the org level. Trace-level reflection (`reflect`) → persona-level evolution (`learning-agent run`) → deliberation-level reflection (this).
+- ✅ 19 new tests; total **874 passing**.
+- ✅ Exports: `runFrqncyReflectCommand`, `summarizeDeliberation`, `buildReflectionPrompt`, `REFLECT_SYSTEM_PROMPT`, `DEFAULT_REFLECTIONS_DIR`, `FrqncyReflectOptions`, `FrqncyReflectResult`.
+
+### v0.14.1-alpha.1 (deliberation inspector)
+- ✅ **`frqncy-harness frqncy --deliberations`** lists every saved deliberation file from `proposals/council-deliberations/` with question, member count, total cost, file size, synthesis status (`✓ synthesized` / `⚠ awaiting synthesis`), and a `[routed]` / `[council]` tag. Sorted by date desc. Pure read of the filesystem.
+- ✅ **`frqncy-harness frqncy --deliberation <slug>`** drills into one deliberation: question, routing reason (when present), each member's model + cost + byte count + conversation-id, full synthesis text, source line, file size.
+- ✅ **`parseDeliberation(raw, slug, path)`** — exported parser that extracts a `DeliberationRecord` (slug, path, title, date, source, question, members, totalCostUsd, routingReason, hasSynthesis, synthesisText, fileBytes) from a deliberation file. Symmetric inverse of `formatCouncilDeliberation`.
+- ✅ **`loadDeliberations(dir)`** — reads every .md file from the deliberations dir, parses each, returns `DeliberationRecord[]` sorted by date desc. Tolerant: ENOENT returns `[]`, unparseable files are skipped silently (the artifact is the durable record; the loader never throws on bad data).
+- ✅ JSON mode emits structured `DeliberationRecord` arrays / objects suitable for piping into `jq`, building a deliberation-explorer UI, or feeding into the Learning Agent for cross-deliberation reflection.
+- ✅ The inspection trio for FRQNCY OS is now four: `--list` (every persona), `--show <slug>` (one persona), `--validate` (architectural invariants), `--history <slug>` (memory), `--deliberations` (every saved convene), `--deliberation <slug>` (one convene). All prompt-free, all zero-cost reads.
+- ✅ 16 new tests in `test/frqncy.test.ts`; total **836 passing**.
+- ✅ Exports: `parseDeliberation`, `loadDeliberations`, `runFrqncyDeliberationsCommand`, `runFrqncyDeliberationCommand`, `DeliberationRecord`, `DeliberationMember`, `FrqncyDeliberationsOptions`, `FrqncyDeliberationOptions`.
+
+### v0.14.0-alpha.1 (persona memory: the trace IS the memory)
+- ✅ **Every FRQNCY OS persona now auto-loads its prior thread history** before each invocation. Realizes the architectural intent ("the trace IS the memory" — `proposals/HARNESS-AS-PHASE2-SUBSTRATE.md`) at the chat() level. Kali no longer forgets you between calls. Sai Maa picks up where she left off.
+- ✅ **New trace API:** `loadThreadHistory(threadId, options)` reads `INDEX.jsonl`, finds matching conversations, reconstructs the message chain in step order, applies caps (default: last 10 conversations, last 40 messages, ~50KB), returns `Message[]` ready to prepend onto a chat() invocation. Pi-aligned: filesystem-as-substrate, lazy read on invoke, no daemon, no separate index — uses what was already on disk.
+- ✅ **`ChatInput.loadHistory`** (opt-in for generic harness callers; ON by default for FRQNCY OS personas). Accepts `true` or `{ maxConversations, maxMessages, maxBytes, includeAborted }`.
+- ✅ **Routing & synthesis passes stay stateless** — when FRQNCY decides who handles a message, that decision shouldn't be confused by prior conversational context. When FRQNCY synthesizes Council responses, it integrates THIS convene's voices, not historical drift. Both meta-passes pin `loadHistory: false` regardless of the user's `--no-memory` flag.
+- ✅ **`--no-memory`** flag disables memory for one invocation (useful when testing a fresh prompt or when memory interferes with a one-shot question).
+- ✅ **`frqncy --history <slug>`** new prompt-free inspector — shows what one persona "remembers" by loading its thread history and printing each turn. `--max-convos N`, `--max-messages N`, `--max-bytes N` cap the lookback. `--json` for piping.
+- ✅ **Trace breadcrumb** — when history is loaded, a `'system'` record at step 0 logs `{ loaded_history: { messages, conversations_read, messages_trimmed, total_bytes } }`. Future readers (and the Learning Agent) can see this call's context wasn't fresh.
+- ✅ **Aborted conversations skipped by default** — `aborted_error` and `aborted_user` records don't pollute persona memory. Override with `includeAborted: true`.
+- ✅ Loaded history is NOT re-traced (it already lives in prior conversations) — only NEW user/system turns from this call get logged. The trace stays append-only without duplication.
+- ✅ 22 new tests (13 in `trace.test.ts`, 9 in `frqncy.test.ts`); total **796 passing**.
+- ✅ Exports: `loadThreadHistory`, `readIndex`, `readConversation`, `LoadThreadHistoryOptions`, `ThreadHistoryResult`, `runFrqncyHistoryCommand`, `FrqncyHistoryOptions`. New `ChatInput.loadHistory` option.
+
+### v0.13.4-alpha.1 (`frqncy --show <slug>` inspects one persona)
 - ✅ **`frqncy-harness frqncy --show <slug>`** drills into one persona: prints frontmatter (name / role / parent / model / voice / veto_authority / evolves), full system-prompt body, byte count, and inoculation status. Prompt-free, no LLM cost.
 - ✅ Closes the inspection trio: `--list` (every persona, one line each), `--validate` (architectural invariants), `--show <slug>` (full body + metadata for one).
 - ✅ Tier classifier reuses the v0.13.2 logic — drilling into `kali` correctly tags the result as `Council`; drilling into `frontend-dev` tags it `Workers`.

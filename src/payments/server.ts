@@ -66,6 +66,31 @@ export interface PaymentMiddlewareOptions {
     payee: string;
     timestamp: string;
   }) => void | Promise<void>;
+  /**
+   * v0.14.1 — Verifiable Settlement Receipt issuer.
+   *
+   * Called after `facilitator.settle` succeeds. Returns a `{ name, value }`
+   * header pair the middleware adds to the response (typically X-RECEIPT
+   * carrying a base64-encoded EIP-712-signed SettlementReceipt). Customers
+   * can verify the signature against the seller's on-chain agentWallet to
+   * prove "this agent received my payment for X resource."
+   *
+   * Returns null to skip (e.g. signing failed). Settlement already succeeded
+   * so the customer still gets the response; receipt absence is recoverable.
+   *
+   * See `createReceiptIssuer` in src/payments/receipt.ts for the canonical impl.
+   */
+  receiptIssuer?: (record: {
+    direction: 'in';
+    path: string;
+    amountAtomic: string;
+    asset: string;
+    network: X402Network;
+    txHash?: string;
+    payer?: string;
+    payee: string;
+    timestamp: string;
+  }) => Promise<{ name: string; value: string } | null>;
 }
 
 export type Middleware = (
@@ -142,19 +167,43 @@ export function paymentMiddleware(opts: PaymentMiddlewareOptions): Middleware {
       Buffer.from(JSON.stringify(settled), 'utf-8').toString('base64'),
     );
 
+    const inboundRecord = {
+      direction: 'in' as const,
+      path,
+      requirements,
+      amountAtomic: requirements.maxAmountRequired,
+      asset: requirements.asset,
+      network: requirements.network,
+      txHash: settled.transaction,
+      payer: settled.payer ?? verifyResult.payer ?? payload.payload.authorization.from,
+      payee: requirements.payTo,
+      timestamp: new Date().toISOString(),
+    };
     if (opts.onPayment) {
-      await opts.onPayment({
-        direction: 'in',
-        path,
-        requirements,
-        amountAtomic: requirements.maxAmountRequired,
-        asset: requirements.asset,
-        network: requirements.network,
-        txHash: settled.transaction,
-        payer: settled.payer ?? verifyResult.payer ?? payload.payload.authorization.from,
-        payee: requirements.payTo,
-        timestamp: new Date().toISOString(),
-      });
+      await opts.onPayment(inboundRecord);
+    }
+
+    // v0.14.1 — sign + attach a Verifiable Settlement Receipt header.
+    // Header is set BEFORE next() so the handler's response carries it
+    // alongside X-PAYMENT-RESPONSE. Issuer failures are non-fatal — the
+    // customer still gets the response, just without provenance.
+    if (opts.receiptIssuer) {
+      try {
+        const header = await opts.receiptIssuer({
+          direction: 'in',
+          path,
+          amountAtomic: inboundRecord.amountAtomic,
+          asset: inboundRecord.asset,
+          network: inboundRecord.network,
+          txHash: inboundRecord.txHash,
+          payer: inboundRecord.payer,
+          payee: inboundRecord.payee,
+          timestamp: inboundRecord.timestamp,
+        });
+        if (header) res.setHeader(header.name, header.value);
+      } catch {
+        // never propagate
+      }
     }
 
     await next();

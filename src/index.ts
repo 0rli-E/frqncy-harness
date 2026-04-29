@@ -413,6 +413,21 @@ export {
   type ServingHandle,
 } from './identity/index.js';
 
+// ── Serve (v0.14) — agent-as-a-service ──────────────────────
+export {
+  serveAgent,
+  createSkillRouteHandler,
+  ServeConfigSchema,
+  ServeRouteConfigSchema,
+  type ServeAgentOptions,
+  type ServeRouteSpec,
+  type ServeAgentHandle,
+  type SkillRouteOptions,
+  type PaidSkillResponse,
+  type ServeConfig,
+  type ServeRouteConfig,
+} from './serve/index.js';
+
 // ── x402 payments (v0.9) ─────────────────────────────────────
 export {
   PaymentRequirementsSchema,
@@ -488,6 +503,25 @@ export {
   type AutoFeedbackConfig,
   type CreateSettleFeedbackWriterOptions,
   type LookupAgentId,
+  // v0.14.1 — verifiable settlement receipts
+  signSettlementReceipt,
+  verifySettlementReceipt,
+  encodeReceiptHeader,
+  decodeReceiptHeader,
+  createReceiptIssuer,
+  SettlementReceiptSchema,
+  SETTLEMENT_RECEIPT_PRIMARY_TYPE,
+  SETTLEMENT_RECEIPT_TYPES,
+  X402_RECEIPT_HEADER,
+  DEFAULT_RECEIPT_DOMAIN_NAME,
+  DEFAULT_RECEIPT_DOMAIN_VERSION,
+  type SettlementReceipt,
+  type SignedSettlementReceipt,
+  type SignSettlementReceiptOptions,
+  type VerifySettlementReceiptOptions,
+  type VerifyReceiptResult,
+  type ReceiptDomain,
+  type CreateReceiptIssuerOptions,
 } from './payments/index.js';
 
 // ── Bridges (v0.9.1) — Daydreams interop + router lane ──────

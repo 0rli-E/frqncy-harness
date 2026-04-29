@@ -18,7 +18,9 @@ import {
   appendTraceRecord,
   getTraceFilePath,
   recordConversationEnd,
+  loadThreadHistory,
   DEFAULT_TRACE_DIR,
+  type LoadThreadHistoryOptions,
 } from './trace.js';
 import { resolveTags, touchActiveThread } from './threads.js';
 import type { TraceRecord } from './types.js';
@@ -54,8 +56,46 @@ export async function chat(input: ChatInput): Promise<ChatResult> {
   // Resolve the provider
   const { model: languageModel, provider, modelId } = await getProvider(parsed.model);
 
-  // Record each user message in the trace
+  // ── Load thread history (v0.14.0) ────────────────────────
+  // Realize "the trace IS the memory": when loadHistory is on AND threadId is set,
+  // pull prior turns from the trace store and prepend them to the messages array.
+  // Loaded turns are NOT re-traced (they're already in the trace by definition);
+  // only NEW turns from `parsed.messages` get logged on this call. A single
+  // 'system' breadcrumb at step 0 records that history was injected.
+  let messagesForCall = parsed.messages;
   let step = 0;
+  if (input.loadHistory && tags.threadId) {
+    const opts: LoadThreadHistoryOptions = {
+      ...(typeof input.loadHistory === 'object' ? input.loadHistory : {}),
+      ...(parsed.traceDir ? { traceDir: parsed.traceDir } : {}),
+    };
+    const history = await loadThreadHistory(tags.threadId, opts);
+    if (history.messages.length > 0) {
+      messagesForCall = [...history.messages, ...parsed.messages];
+      // Breadcrumb so future readers (and the Learning Agent) know this call's
+      // context wasn't fresh. Stored as content (not message) so it's visible
+      // in the trace JSONL but doesn't get re-injected on subsequent calls.
+      await trace({
+        ts: new Date().toISOString(),
+        conversation_id: conversationId,
+        step,
+        type: 'system',
+        role: 'system',
+        content: {
+          loaded_history: {
+            messages: history.messages.length,
+            conversations_read: history.conversationsRead,
+            messages_trimmed: history.messagesTrimmed,
+            total_bytes: history.totalBytes,
+          },
+        },
+      });
+      step++;
+    }
+  }
+
+  // Record each NEW user/system message from parsed.messages in the trace.
+  // (Loaded history is NOT re-traced — it already lives in the prior conversations.)
   for (const message of parsed.messages) {
     if (message.role === 'user' || message.role === 'system') {
       await trace({
@@ -77,7 +117,7 @@ export async function chat(input: ChatInput): Promise<ChatResult> {
   try {
     result = await generateText({
       model: languageModel,
-      messages: parsed.messages,
+      messages: messagesForCall,
       system: parsed.system,
       temperature: parsed.temperature,
       ...(parsed.maxOutputTokens !== undefined ? { maxOutputTokens: parsed.maxOutputTokens } : {}),

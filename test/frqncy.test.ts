@@ -19,6 +19,20 @@ import {
   PERSONA_INOCULATION_INVARIANT,
   inspectPersona,
   runFrqncyShowCommand,
+  runFrqncyHistoryCommand,
+  parseDeliberation,
+  loadDeliberations,
+  runFrqncyDeliberationsCommand,
+  runFrqncyDeliberationCommand,
+  summarizeDeliberation,
+  buildReflectionPrompt,
+  runFrqncyReflectCommand,
+  REFLECT_SYSTEM_PROMPT,
+  DEFAULT_REFLECTIONS_DIR,
+  parseReflection,
+  loadReflections,
+  runFrqncyReflectionsCommand,
+  runFrqncyActionsCommand,
   ROUTING_INSTRUCTIONS,
   SYNTHESIS_INSTRUCTIONS,
   COUNCIL_MEMBERS,
@@ -1693,6 +1707,1182 @@ describe('runFrqncyShowCommand', () => {
     await expect(runFrqncyShowCommand('nonexistent', { personaDir: dir })).rejects.toThrow(
       /persona "nonexistent" not found/,
     );
+  });
+});
+
+describe('persona memory wiring (v0.14.0)', () => {
+  let cwd: string;
+  let originalWrite: typeof process.stdout.write;
+  let stdoutBuffer: string;
+
+  beforeEach(async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'frqncy-memory-'));
+    stdoutBuffer = '';
+    originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+      stdoutBuffer += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof process.stdout.write;
+  });
+  afterEach(async () => {
+    process.stdout.write = originalWrite;
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  function makePersona(slug: string, name: string): LoadedPersona {
+    return {
+      slug,
+      path: `/fake/${slug}.md`,
+      frontmatter: { name, role: 'test' },
+      body: `you are ${slug}.`,
+    };
+  }
+
+  function makeRecordingChat(): {
+    chatFn: NonNullable<FrqncyCommandOptions['chatFn']>;
+    calls: { threadId?: string; loadHistory?: boolean | object; system?: string }[];
+  } {
+    const calls: { threadId?: string; loadHistory?: boolean | object; system?: string }[] = [];
+    const chatFn: NonNullable<FrqncyCommandOptions['chatFn']> = async (input) => {
+      calls.push({
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.loadHistory !== undefined ? { loadHistory: input.loadHistory } : {}),
+        ...(input.system ? { system: input.system } : {}),
+      });
+      // Default: no [ROUTE] line so auto mode falls back to direct
+      return {
+        text: 'response',
+        conversationId: `c-${calls.length}`,
+        usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 },
+        model: input.model,
+        provider: 'anthropic',
+        finishReason: 'stop',
+      };
+    };
+    return { chatFn, calls };
+  }
+
+  it('--persona invocation passes loadHistory: true by default', async () => {
+    const { chatFn, calls } = makeRecordingChat();
+    await runFrqncyCommand('q', {
+      cwd,
+      persona: 'kali',
+      chatFn,
+      loadPersonaFn: async (slug) => (slug === 'kali' ? makePersona('kali', 'Kali') : null),
+      json: true,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.loadHistory).toBe(true);
+    expect(calls[0]!.threadId).toBe('frqncy-os/kali');
+  });
+
+  it('--no-memory disables loadHistory on persona invocation', async () => {
+    const { chatFn, calls } = makeRecordingChat();
+    await runFrqncyCommand('q', {
+      cwd,
+      persona: 'kali',
+      noMemory: true,
+      chatFn,
+      loadPersonaFn: async (slug) => (slug === 'kali' ? makePersona('kali', 'Kali') : null),
+      json: true,
+    });
+    expect(calls[0]!.loadHistory).toBe(false);
+  });
+
+  it('--council passes loadHistory: true to all 7 invocations by default', async () => {
+    const personas: Record<string, LoadedPersona> = {};
+    for (const m of COUNCIL_MEMBERS) personas[m] = makePersona(m, m);
+    const { chatFn, calls } = makeRecordingChat();
+    await runFrqncyCommand('q', {
+      cwd,
+      council: true,
+      chatFn,
+      loadPersonaFn: async (slug) => personas[slug] ?? null,
+      json: true,
+    });
+    expect(calls).toHaveLength(7);
+    for (const c of calls) expect(c.loadHistory).toBe(true);
+  });
+
+  it('--council with --no-memory disables loadHistory on all 7', async () => {
+    const personas: Record<string, LoadedPersona> = {};
+    for (const m of COUNCIL_MEMBERS) personas[m] = makePersona(m, m);
+    const { chatFn, calls } = makeRecordingChat();
+    await runFrqncyCommand('q', {
+      cwd,
+      council: true,
+      noMemory: true,
+      chatFn,
+      loadPersonaFn: async (slug) => personas[slug] ?? null,
+      json: true,
+    });
+    for (const c of calls) expect(c.loadHistory).toBe(false);
+  });
+
+  it('auto-mode routing pass is stateless (loadHistory: false)', async () => {
+    const { chatFn, calls } = makeRecordingChat();
+    await runFrqncyCommand('q', {
+      cwd,
+      // default = auto mode
+      chatFn,
+      loadPersonaFn: async (slug) =>
+        slug === 'frqncy' ? makePersona('frqncy', 'FRQNCY') : null,
+      json: true,
+    });
+    // The first call IS the routing pass — must be stateless
+    expect(calls[0]!.system).toContain('Routing protocol');
+    expect(calls[0]!.loadHistory).toBe(false);
+  });
+
+  it('auto-mode multi: routing+synthesis stateless, persona invocations get memory', async () => {
+    let callCount = 0;
+    const seen: { loadHistory?: boolean | object; system?: string }[] = [];
+    const chatFn: NonNullable<FrqncyCommandOptions['chatFn']> = async (input) => {
+      callCount++;
+      seen.push({
+        ...(input.loadHistory !== undefined ? { loadHistory: input.loadHistory } : {}),
+        ...(input.system ? { system: input.system } : {}),
+      });
+      const text =
+        callCount === 1
+          ? '[ROUTE]: {"action":"multi","personas":["sai-maa","ceo"],"reason":"r"}'
+          : callCount === 4
+            ? 'synthesized'
+            : `${input.threadId} responds`;
+      return {
+        text,
+        conversationId: `c-${callCount}`,
+        usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 },
+        model: input.model,
+        provider: 'anthropic',
+        finishReason: 'stop',
+      };
+    };
+    await runFrqncyCommand('q', {
+      cwd,
+      chatFn,
+      loadPersonaFn: async (slug) => {
+        if (slug === 'frqncy') return makePersona('frqncy', 'FRQNCY');
+        if (slug === 'sai-maa') return makePersona('sai-maa', 'Sai Maa');
+        if (slug === 'ceo') return makePersona('ceo', 'CEO');
+        return null;
+      },
+      json: true,
+    });
+    expect(seen).toHaveLength(4);
+    // Call 1: routing pass — stateless
+    expect(seen[0]!.system).toContain('Routing protocol');
+    expect(seen[0]!.loadHistory).toBe(false);
+    // Calls 2 & 3: persona invocations — memory ON
+    expect(seen[1]!.loadHistory).toBe(true);
+    expect(seen[2]!.loadHistory).toBe(true);
+    // Call 4: synthesis — stateless
+    expect(seen[3]!.system).toContain('Synthesis');
+    expect(seen[3]!.loadHistory).toBe(false);
+  });
+
+  it('--no-route passes loadHistory: true (default) to FRQNCY persona', async () => {
+    const { chatFn, calls } = makeRecordingChat();
+    await runFrqncyCommand('q', {
+      cwd,
+      noRoute: true,
+      chatFn,
+      loadPersonaFn: async (slug) =>
+        slug === 'frqncy' ? makePersona('frqncy', 'FRQNCY') : null,
+      json: true,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.loadHistory).toBe(true);
+  });
+});
+
+describe('runFrqncyHistoryCommand reads real trace data (end-to-end)', () => {
+  let traceDir: string;
+  let stdoutBuffer: string;
+  let originalWrite: typeof process.stdout.write;
+
+  beforeEach(async () => {
+    traceDir = await mkdtemp(join(tmpdir(), 'frqncy-history-e2e-'));
+    stdoutBuffer = '';
+    originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+      stdoutBuffer += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof process.stdout.write;
+  });
+  afterEach(async () => {
+    process.stdout.write = originalWrite;
+    await rm(traceDir, { recursive: true, force: true });
+  });
+
+  it('shows messages that were previously written to a thread', async () => {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { randomUUID } = await import('node:crypto');
+    const { TRACE_SCHEMA_VERSION } = await import('../src/types.js');
+    const conversationId = randomUUID();
+    const startedAt = '2026-04-29T10:00:00.000Z';
+    const datedDir = join(traceDir, '2026-04-29');
+    await mkdir(datedDir, { recursive: true });
+    const traceFile = join(datedDir, `${conversationId}.jsonl`);
+
+    const SCHEMA_V = TRACE_SCHEMA_VERSION;
+    const userRecord = JSON.stringify({
+      ts: startedAt,
+      conversation_id: conversationId,
+      step: 0,
+      type: 'user',
+      role: 'user',
+      content: 'cut what is dying',
+      thread_id: 'frqncy-os/kali',
+      schema_version: SCHEMA_V,
+    });
+    const asstRecord = JSON.stringify({
+      ts: startedAt,
+      conversation_id: conversationId,
+      step: 1,
+      type: 'assistant',
+      role: 'assistant',
+      content: 'the old story',
+      thread_id: 'frqncy-os/kali',
+      schema_version: SCHEMA_V,
+    });
+    await writeFile(traceFile, userRecord + '\n' + asstRecord + '\n', 'utf-8');
+
+    const indexRecord = JSON.stringify({
+      conversation_id: conversationId,
+      started_at: startedAt,
+      ended_at: startedAt,
+      model: 'anthropic/claude-sonnet-4-6',
+      message_count: 2,
+      total_cost_usd: 0,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_cached_input_tokens: 0,
+      status: 'completed',
+      thread_id: 'frqncy-os/kali',
+      schema_version: SCHEMA_V,
+    });
+    await mkdir(traceDir, { recursive: true });
+    await writeFile(join(traceDir, 'INDEX.jsonl'), indexRecord + '\n', 'utf-8');
+
+    const result = await runFrqncyHistoryCommand('kali', { json: true, traceDir });
+    const parsed = JSON.parse(stdoutBuffer);
+    expect(parsed.threadId).toBe('frqncy-os/kali');
+    expect(parsed.messages).toEqual([
+      { role: 'user', content: 'cut what is dying' },
+      { role: 'assistant', content: 'the old story' },
+    ]);
+    expect(parsed.conversationsRead).toBe(1);
+    expect(result.totalBytes).toBeGreaterThan(0);
+  });
+});
+
+describe('runFrqncyHistoryCommand', () => {
+  let traceDir: string;
+  let stdoutBuffer: string;
+  let originalWrite: typeof process.stdout.write;
+
+  beforeEach(async () => {
+    traceDir = await mkdtemp(join(tmpdir(), 'frqncy-history-cmd-'));
+    stdoutBuffer = '';
+    originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+      stdoutBuffer += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof process.stdout.write;
+  });
+  afterEach(async () => {
+    process.stdout.write = originalWrite;
+    await rm(traceDir, { recursive: true, force: true });
+  });
+
+  it('throws when slug is empty', async () => {
+    await expect(runFrqncyHistoryCommand('')).rejects.toThrow(/slug required/);
+    await expect(runFrqncyHistoryCommand('   ')).rejects.toThrow(/slug required/);
+  });
+
+  it('renders a friendly empty-state message when no history exists', async () => {
+    // Point the loader at an empty trace dir by overriding env temporarily
+    // is brittle; instead, just call against a slug that won't match anything
+    // in the user's real ~/.frqncy-harness/traces (we can't isolate the
+    // default trace dir without a parameter). Use --json to avoid relying
+    // on real user traces affecting human output.
+    const result = await runFrqncyHistoryCommand('does-not-exist-' + Date.now(), {
+      json: true,
+      maxConversations: 1,
+    });
+    expect(result.messages).toEqual([]);
+    const parsed = JSON.parse(stdoutBuffer);
+    expect(parsed.threadId).toMatch(/^frqncy-os\/does-not-exist-/);
+    expect(parsed.messages).toEqual([]);
+    expect(parsed.conversationsRead).toBe(0);
+  });
+});
+
+describe('parseDeliberation', () => {
+  it('parses a council deliberation (placeholder synthesis)', () => {
+    const responses = [
+      { persona: 'Krishna', conversationId: 'k-uuid', text: 'krishna body', costUsd: 0.005, model: 'anthropic/claude-opus-4-6' },
+      { persona: 'Kali', conversationId: 'kali-uuid', text: 'kali body', costUsd: 0.005, model: 'anthropic/claude-opus-4-6' },
+    ];
+    const raw = formatCouncilDeliberation({
+      question: 'should we take Lugano',
+      responses,
+      generatedAt: '2026-04-29T12:00:00.000Z',
+    });
+    const r = parseDeliberation(raw, '2026-04-29-should-we-take-lugano', '/fake/path.md');
+    expect(r.title).toBe('Council deliberation');
+    expect(r.date).toBe('2026-04-29');
+    expect(r.source).toContain('frqncy --council --save');
+    expect(r.question).toBe('should we take Lugano');
+    expect(r.members).toHaveLength(2);
+    expect(r.members[0]!.name).toBe('Krishna');
+    expect(r.members[0]!.model).toBe('anthropic/claude-opus-4-6');
+    expect(r.members[0]!.costUsd).toBe(0.005);
+    expect(r.members[0]!.conversationId).toBe('k-uuid');
+    expect(r.members[1]!.name).toBe('Kali');
+    expect(r.totalCostUsd).toBeCloseTo(0.01, 4);
+    expect(r.hasSynthesis).toBe(false);
+    expect(r.synthesisText).toBeUndefined();
+    expect(r.routingReason).toBeUndefined();
+  });
+
+  it('parses a routed deliberation with embedded synthesis + routing reason', () => {
+    const responses = [
+      { persona: 'Sai Maa', conversationId: 'sm-uuid', text: 'ground first', costUsd: 0.005, model: 'anthropic/claude-opus-4-6' },
+      { persona: 'CEO', conversationId: 'ceo-uuid', text: 'move on it', costUsd: 0.005, model: 'anthropic/claude-sonnet-4-6' },
+    ];
+    const raw = formatCouncilDeliberation({
+      question: 'should we take Lugano',
+      responses,
+      generatedAt: '2026-04-29T12:00:00.000Z',
+      title: 'Routed deliberation',
+      source: 'frqncy-harness frqncy --save (auto-routed)',
+      synthesisText: 'take it but ground first',
+      routingReason: 'ground then move',
+    });
+    const r = parseDeliberation(raw, '2026-04-29-should-we-take-lugano', '/fake/path.md');
+    expect(r.title).toBe('Routed deliberation');
+    expect(r.routingReason).toBe('ground then move');
+    expect(r.hasSynthesis).toBe(true);
+    expect(r.synthesisText).toBe('take it but ground first');
+    expect(r.source).toContain('auto-routed');
+    expect(r.members).toHaveLength(2);
+    expect(r.members[0]!.name).toBe('Sai Maa');
+  });
+
+  it('records body byte count per member', () => {
+    const responses = [
+      { persona: 'Krishna', conversationId: 'a', text: 'short body', costUsd: 0, model: 'm' },
+    ];
+    const raw = formatCouncilDeliberation({
+      question: 'q',
+      responses,
+      generatedAt: '2026-04-29T12:00:00.000Z',
+    });
+    const r = parseDeliberation(raw, 'slug', '/x.md');
+    expect(r.members[0]!.bodyBytes).toBeGreaterThan(0);
+  });
+});
+
+describe('loadDeliberations', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'frqncy-delibs-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeDeliberation(slug: string, opts: {
+    question: string;
+    generatedAt: string;
+    title?: string;
+    synthesisText?: string;
+    routingReason?: string;
+  }): Promise<void> {
+    const responses = [
+      { persona: 'Kali', conversationId: 'a', text: 'cut it', costUsd: 0.005, model: 'anthropic/claude-opus-4-6' },
+    ];
+    const content = formatCouncilDeliberation({
+      question: opts.question,
+      responses,
+      generatedAt: opts.generatedAt,
+      ...(opts.title ? { title: opts.title } : {}),
+      ...(opts.synthesisText ? { synthesisText: opts.synthesisText } : {}),
+      ...(opts.routingReason ? { routingReason: opts.routingReason } : {}),
+    });
+    await writeFile(join(dir, `${slug}.md`), content, 'utf-8');
+  }
+
+  it('returns [] when the dir does not exist', async () => {
+    expect(await loadDeliberations(join(dir, 'does-not-exist'))).toEqual([]);
+  });
+
+  it('returns [] when the dir is empty', async () => {
+    expect(await loadDeliberations(dir)).toEqual([]);
+  });
+
+  it('parses every .md file and skips non-md files', async () => {
+    await writeDeliberation('2026-04-29-q1', {
+      question: 'first question',
+      generatedAt: '2026-04-29T10:00:00.000Z',
+    });
+    await writeDeliberation('2026-04-28-q2', {
+      question: 'second question',
+      generatedAt: '2026-04-28T10:00:00.000Z',
+    });
+    await writeFile(join(dir, 'README.txt'), 'not a deliberation', 'utf-8');
+    const records = await loadDeliberations(dir);
+    expect(records).toHaveLength(2);
+    expect(records.find((r) => r.slug === '2026-04-29-q1')).toBeDefined();
+    expect(records.find((r) => r.slug === 'README')).toBeUndefined();
+  });
+
+  it('sorts records by date descending', async () => {
+    await writeDeliberation('2026-04-27-old', {
+      question: 'old',
+      generatedAt: '2026-04-27T10:00:00.000Z',
+    });
+    await writeDeliberation('2026-04-29-new', {
+      question: 'new',
+      generatedAt: '2026-04-29T10:00:00.000Z',
+    });
+    await writeDeliberation('2026-04-28-mid', {
+      question: 'mid',
+      generatedAt: '2026-04-28T10:00:00.000Z',
+    });
+    const records = await loadDeliberations(dir);
+    const dates = records.map((r) => r.date);
+    expect(dates).toEqual(['2026-04-29', '2026-04-28', '2026-04-27']);
+  });
+});
+
+describe('runFrqncyDeliberationsCommand', () => {
+  let dir: string;
+  let stdoutBuffer: string;
+  let originalWrite: typeof process.stdout.write;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'frqncy-delibs-cmd-'));
+    stdoutBuffer = '';
+    originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+      stdoutBuffer += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof process.stdout.write;
+  });
+  afterEach(async () => {
+    process.stdout.write = originalWrite;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('emits empty-state hint when no records exist', async () => {
+    const records = await runFrqncyDeliberationsCommand({ dir });
+    expect(records).toEqual([]);
+    expect(stdoutBuffer).toContain('no deliberation files yet');
+  });
+
+  it('lists records grouped by routed/council with synthesis status', async () => {
+    const responses = [
+      { persona: 'Kali', conversationId: 'a', text: 'cut', costUsd: 0.005, model: 'm' },
+    ];
+    await writeFile(
+      join(dir, '2026-04-29-q.md'),
+      formatCouncilDeliberation({
+        question: 'a question',
+        responses,
+        generatedAt: '2026-04-29T10:00:00.000Z',
+        title: 'Routed deliberation',
+        synthesisText: 's',
+      }),
+      'utf-8',
+    );
+    await runFrqncyDeliberationsCommand({ dir });
+    expect(stdoutBuffer).toContain('2026-04-29-q');
+    expect(stdoutBuffer).toContain('routed');
+    expect(stdoutBuffer).toContain('synthesized');
+  });
+
+  it('emits structured JSON with --json', async () => {
+    const responses = [
+      { persona: 'Kali', conversationId: 'a', text: 'cut', costUsd: 0.005, model: 'm' },
+    ];
+    await writeFile(
+      join(dir, '2026-04-29-q.md'),
+      formatCouncilDeliberation({
+        question: 'q',
+        responses,
+        generatedAt: '2026-04-29T10:00:00.000Z',
+      }),
+      'utf-8',
+    );
+    await runFrqncyDeliberationsCommand({ dir, json: true });
+    const parsed = JSON.parse(stdoutBuffer);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].slug).toBe('2026-04-29-q');
+  });
+});
+
+describe('runFrqncyDeliberationCommand', () => {
+  let dir: string;
+  let stdoutBuffer: string;
+  let originalWrite: typeof process.stdout.write;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'frqncy-delib-cmd-'));
+    stdoutBuffer = '';
+    originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+      stdoutBuffer += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof process.stdout.write;
+  });
+  afterEach(async () => {
+    process.stdout.write = originalWrite;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('throws when slug is empty', async () => {
+    await expect(runFrqncyDeliberationCommand('', { dir })).rejects.toThrow(/slug required/);
+    await expect(runFrqncyDeliberationCommand('   ', { dir })).rejects.toThrow(/slug required/);
+  });
+
+  it('throws helpfully when the file is not found', async () => {
+    await expect(runFrqncyDeliberationCommand('does-not-exist', { dir })).rejects.toThrow(
+      /not found/,
+    );
+  });
+
+  it('strips trailing .md from slug', async () => {
+    const responses = [
+      { persona: 'Kali', conversationId: 'a', text: 'cut', costUsd: 0.005, model: 'm' },
+    ];
+    await writeFile(
+      join(dir, '2026-04-29-q.md'),
+      formatCouncilDeliberation({
+        question: 'q',
+        responses,
+        generatedAt: '2026-04-29T10:00:00.000Z',
+      }),
+      'utf-8',
+    );
+    const result = await runFrqncyDeliberationCommand('2026-04-29-q.md', { dir, json: true });
+    expect(result.slug).toBe('2026-04-29-q');
+  });
+
+  it('renders question, members, synthesis, source in human mode', async () => {
+    const responses = [
+      { persona: 'Sai Maa', conversationId: 'a', text: 'ground', costUsd: 0.005, model: 'm' },
+      { persona: 'CEO', conversationId: 'b', text: 'move', costUsd: 0.005, model: 'm' },
+    ];
+    await writeFile(
+      join(dir, '2026-04-29-q.md'),
+      formatCouncilDeliberation({
+        question: 'should we take lugano',
+        responses,
+        generatedAt: '2026-04-29T10:00:00.000Z',
+        title: 'Routed deliberation',
+        source: 'frqncy-harness frqncy --save (auto-routed)',
+        synthesisText: 'take it but ground first',
+        routingReason: 'ground then move',
+      }),
+      'utf-8',
+    );
+    await runFrqncyDeliberationCommand('2026-04-29-q', { dir });
+    expect(stdoutBuffer).toContain('── question ──');
+    expect(stdoutBuffer).toContain('should we take lugano');
+    expect(stdoutBuffer).toContain('── routing reason ──');
+    expect(stdoutBuffer).toContain('ground then move');
+    expect(stdoutBuffer).toContain('── members convened (2) ──');
+    expect(stdoutBuffer).toContain('Sai Maa');
+    expect(stdoutBuffer).toContain('CEO');
+    expect(stdoutBuffer).toContain('── synthesis (FRQNCY) ──');
+    expect(stdoutBuffer).toContain('take it but ground first');
+  });
+
+  it('flags missing synthesis with a hint', async () => {
+    const responses = [
+      { persona: 'Kali', conversationId: 'a', text: 'cut', costUsd: 0.005, model: 'm' },
+    ];
+    await writeFile(
+      join(dir, '2026-04-29-q.md'),
+      formatCouncilDeliberation({
+        question: 'q',
+        responses,
+        generatedAt: '2026-04-29T10:00:00.000Z',
+      }),
+      'utf-8',
+    );
+    await runFrqncyDeliberationCommand('2026-04-29-q', { dir });
+    expect(stdoutBuffer).toContain('no embedded synthesis');
+  });
+
+  it('emits structured JSON with --json', async () => {
+    const responses = [
+      { persona: 'Kali', conversationId: 'a', text: 'cut', costUsd: 0.005, model: 'm' },
+    ];
+    await writeFile(
+      join(dir, '2026-04-29-q.md'),
+      formatCouncilDeliberation({
+        question: 'q',
+        responses,
+        generatedAt: '2026-04-29T10:00:00.000Z',
+      }),
+      'utf-8',
+    );
+    await runFrqncyDeliberationCommand('2026-04-29-q', { dir, json: true });
+    const parsed = JSON.parse(stdoutBuffer);
+    expect(parsed.slug).toBe('2026-04-29-q');
+    expect(parsed.question).toBe('q');
+    expect(parsed.members).toHaveLength(1);
+  });
+});
+
+describe('summarizeDeliberation', () => {
+  function makeRecord(opts: {
+    title?: string;
+    routingReason?: string;
+    synthesisText?: string;
+    members?: { persona: string; conversationId: string; text: string; costUsd: number; model: string }[];
+  } = {}) {
+    const responses = opts.members ?? [
+      { persona: 'Kali', conversationId: 'a', text: 'cut it', costUsd: 0.005, model: 'm' },
+    ];
+    const raw = formatCouncilDeliberation({
+      question: 'test question',
+      responses,
+      generatedAt: '2026-04-29T10:00:00.000Z',
+      ...(opts.title ? { title: opts.title } : {}),
+      ...(opts.routingReason ? { routingReason: opts.routingReason } : {}),
+      ...(opts.synthesisText ? { synthesisText: opts.synthesisText } : {}),
+    });
+    return parseDeliberation(raw, '2026-04-29-test-question', '/x.md');
+  }
+
+  it('produces a compact summary including question, members, and synthesis', () => {
+    const r = makeRecord({ synthesisText: 'integrate this' });
+    const s = summarizeDeliberation(r);
+    expect(s).toContain('*2026-04-29-test-question*');
+    expect(s).toContain('test question');
+    expect(s).toContain('Kali');
+    expect(s).toContain('integrate this');
+  });
+
+  it('marks placeholder synthesis explicitly', () => {
+    const r = makeRecord();
+    const s = summarizeDeliberation(r);
+    expect(s).toContain('placeholder — not yet written');
+  });
+
+  it('includes routing reason when present', () => {
+    const r = makeRecord({ routingReason: 'ground first', synthesisText: 's' });
+    const s = summarizeDeliberation(r);
+    expect(s).toContain('Routing reason: ground first');
+  });
+
+  it('tags routed vs council based on title', () => {
+    const routed = makeRecord({ title: 'Routed deliberation', synthesisText: 's' });
+    const council = makeRecord();
+    expect(summarizeDeliberation(routed)).toContain('(routed,');
+    expect(summarizeDeliberation(council)).toContain('(council,');
+  });
+
+  it('truncates long synthesis to ~400 chars with ellipsis', () => {
+    const r = makeRecord({ synthesisText: 'x'.repeat(800) });
+    const s = summarizeDeliberation(r);
+    expect(s).toContain('…');
+    // Cap at 400 + the prefix; we don't need the exact byte count
+    expect(s.length).toBeLessThan(800);
+  });
+});
+
+describe('buildReflectionPrompt', () => {
+  it('handles empty corpus gracefully', () => {
+    const p = buildReflectionPrompt([], '2026-04-29T10:00:00.000Z');
+    expect(p).toContain('Records reviewed: 0');
+    expect(p).toContain('no records');
+  });
+
+  it('includes one summary block per record', () => {
+    const responses = [
+      { persona: 'Kali', conversationId: 'a', text: 'cut', costUsd: 0.005, model: 'm' },
+    ];
+    const r1 = parseDeliberation(
+      formatCouncilDeliberation({ question: 'q1', responses, generatedAt: '2026-04-29T10:00:00.000Z' }),
+      '2026-04-29-q1', '/x.md',
+    );
+    const r2 = parseDeliberation(
+      formatCouncilDeliberation({ question: 'q2', responses, generatedAt: '2026-04-28T10:00:00.000Z' }),
+      '2026-04-28-q2', '/y.md',
+    );
+    const p = buildReflectionPrompt([r1, r2], '2026-04-29T10:00:00.000Z');
+    expect(p).toContain('Records reviewed: 2');
+    expect(p).toContain('q1');
+    expect(p).toContain('q2');
+    expect(p).toContain('*2026-04-29-q1*');
+    expect(p).toContain('*2026-04-28-q2*');
+  });
+
+  it('reports a date range across the corpus', () => {
+    const responses = [
+      { persona: 'Kali', conversationId: 'a', text: 'cut', costUsd: 0, model: 'm' },
+    ];
+    const r1 = parseDeliberation(
+      formatCouncilDeliberation({ question: 'q1', responses, generatedAt: '2026-04-29T10:00:00.000Z' }),
+      '2026-04-29-q1', '/x.md',
+    );
+    const r2 = parseDeliberation(
+      formatCouncilDeliberation({ question: 'q2', responses, generatedAt: '2026-04-25T10:00:00.000Z' }),
+      '2026-04-25-q2', '/y.md',
+    );
+    const p = buildReflectionPrompt([r1, r2], '2026-04-29T10:00:00.000Z');
+    expect(p).toContain('Date range: 2026-04-25 → 2026-04-29');
+  });
+});
+
+describe('REFLECT_SYSTEM_PROMPT', () => {
+  it('contains the inoculation invariant', () => {
+    expect(REFLECT_SYSTEM_PROMPT).toContain('reward hacking');
+  });
+
+  it('names all output sections', () => {
+    expect(REFLECT_SYSTEM_PROMPT).toContain('## Themes');
+    expect(REFLECT_SYSTEM_PROMPT).toContain('## Routing patterns');
+    expect(REFLECT_SYSTEM_PROMPT).toContain('## Voice signals');
+    expect(REFLECT_SYSTEM_PROMPT).toContain('## Action items');
+    expect(REFLECT_SYSTEM_PROMPT).toContain('## Open questions for Orli');
+  });
+
+  it('explicitly tells the model not to invent themes from a too-small corpus', () => {
+    expect(REFLECT_SYSTEM_PROMPT).toMatch(/too small|too small/);
+  });
+});
+
+describe('runFrqncyReflectCommand', () => {
+  let cwd: string;
+  let dir: string;
+  let stdoutBuffer: string;
+  let originalWrite: typeof process.stdout.write;
+
+  beforeEach(async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'frqncy-reflect-cwd-'));
+    dir = join(cwd, 'proposals/council-deliberations');
+    await mkdir(dir, { recursive: true });
+    stdoutBuffer = '';
+    originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+      stdoutBuffer += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof process.stdout.write;
+  });
+  afterEach(async () => {
+    process.stdout.write = originalWrite;
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  async function seedDeliberation(slug: string, opts: { question: string; generatedAt: string }) {
+    const responses = [
+      { persona: 'Kali', conversationId: 'a', text: 'cut', costUsd: 0.005, model: 'm' },
+    ];
+    await writeFile(
+      join(dir, `${slug}.md`),
+      formatCouncilDeliberation({
+        question: opts.question,
+        responses,
+        generatedAt: opts.generatedAt,
+      }),
+      'utf-8',
+    );
+  }
+
+  function makeChatStub(text: string): NonNullable<FrqncyCommandOptions['chatFn']> {
+    return async (input: ChatInput): Promise<ChatResult> => ({
+      text,
+      conversationId: 'reflect-conv',
+      usage: { inputTokens: 100, outputTokens: 50, cachedInputTokens: 0, costUsd: 0.012 },
+      model: input.model,
+      provider: 'anthropic',
+      finishReason: 'stop',
+    });
+  }
+
+  it('throws when no deliberations exist', async () => {
+    await expect(runFrqncyReflectCommand({ cwd, chatFn: makeChatStub('x') })).rejects.toThrow(
+      /No deliberation records to reflect on/,
+    );
+  });
+
+  it('throws when --since filters everything out', async () => {
+    await seedDeliberation('2026-04-29-q', { question: 'q', generatedAt: '2026-04-29T10:00:00.000Z' });
+    await expect(
+      runFrqncyReflectCommand({ cwd, since: '2026-05-01', chatFn: makeChatStub('x') }),
+    ).rejects.toThrow(/No deliberation records.*since 2026-05-01/);
+  });
+
+  it('reviews up to --last N most-recent records', async () => {
+    await seedDeliberation('2026-04-25-q1', { question: 'q1', generatedAt: '2026-04-25T10:00:00.000Z' });
+    await seedDeliberation('2026-04-26-q2', { question: 'q2', generatedAt: '2026-04-26T10:00:00.000Z' });
+    await seedDeliberation('2026-04-27-q3', { question: 'q3', generatedAt: '2026-04-27T10:00:00.000Z' });
+    const result = await runFrqncyReflectCommand({
+      cwd,
+      last: 2,
+      json: true,
+      chatFn: makeChatStub('reflection text'),
+    });
+    expect(result.reviewed).toHaveLength(2);
+    // Most recent should win — 27, 26
+    expect(result.reviewed[0]).toBe('2026-04-27-q3');
+    expect(result.reviewed[1]).toBe('2026-04-26-q2');
+  });
+
+  it('passes the right system prompt + threadId to the chat call', async () => {
+    await seedDeliberation('2026-04-29-q', { question: 'q', generatedAt: '2026-04-29T10:00:00.000Z' });
+    const captured: { system?: string; threadId?: string; projectId?: string } = {};
+    const chatFn: NonNullable<FrqncyCommandOptions['chatFn']> = async (input) => {
+      captured.system = input.system;
+      captured.threadId = input.threadId;
+      captured.projectId = input.projectId;
+      return {
+        text: 'r',
+        conversationId: 'c',
+        usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, costUsd: 0 },
+        model: input.model,
+        provider: 'anthropic',
+        finishReason: 'stop',
+      };
+    };
+    await runFrqncyReflectCommand({ cwd, chatFn, json: true });
+    expect(captured.system).toBe(REFLECT_SYSTEM_PROMPT);
+    expect(captured.threadId).toBe('frqncy-os/learning-agent');
+    expect(captured.projectId).toBe('frqncy-os');
+  });
+
+  it('emits structured JSON with --json', async () => {
+    await seedDeliberation('2026-04-29-q', { question: 'q', generatedAt: '2026-04-29T10:00:00.000Z' });
+    await runFrqncyReflectCommand({ cwd, json: true, chatFn: makeChatStub('r') });
+    const parsed = JSON.parse(stdoutBuffer);
+    expect(parsed.reviewed).toEqual(['2026-04-29-q']);
+    expect(parsed.reflectionText).toBe('r');
+    expect(parsed.costUsd).toBe(0.012);
+  });
+
+  it('saves the reflection to proposals/reflections/ when --save', async () => {
+    await seedDeliberation('2026-04-29-q', { question: 'q', generatedAt: '2026-04-29T10:00:00.000Z' });
+    const result = await runFrqncyReflectCommand({
+      cwd,
+      save: true,
+      chatFn: makeChatStub('the actual reflection'),
+      json: true,
+    });
+    expect(result.savedTo).toBeDefined();
+    expect(result.savedTo!).toContain('proposals/reflections/');
+    expect(result.savedTo!).toMatch(/-deliberation-reflection\.md$/);
+    const written = await readFile(result.savedTo!, 'utf-8');
+    expect(written).toContain('# Deliberation reflection');
+    expect(written).toContain('Reviewed 1 deliberation');
+    expect(written).toContain('the actual reflection');
+    expect(written).toContain('*2026-04-29-q*');
+  });
+
+  it('saves to a custom --output path when provided', async () => {
+    await seedDeliberation('2026-04-29-q', { question: 'q', generatedAt: '2026-04-29T10:00:00.000Z' });
+    const customPath = join(cwd, 'custom-output.md');
+    const result = await runFrqncyReflectCommand({
+      cwd,
+      output: customPath,
+      chatFn: makeChatStub('r'),
+      json: true,
+    });
+    expect(result.savedTo).toBe(customPath);
+    const written = await readFile(customPath, 'utf-8');
+    expect(written).toContain('# Deliberation reflection');
+  });
+});
+
+describe('DEFAULT_REFLECTIONS_DIR', () => {
+  it('is "proposals/reflections"', () => {
+    expect(DEFAULT_REFLECTIONS_DIR).toBe('proposals/reflections');
+  });
+});
+
+describe('parseReflection', () => {
+  function makeReflectionRaw(opts: {
+    date?: string;
+    recordsReviewed?: number;
+    model?: string;
+    cost?: number;
+    dateRange?: string;
+    corpus?: string[];
+    body?: string;
+  } = {}) {
+    const date = opts.date ?? '2026-04-29';
+    const recordsReviewed = opts.recordsReviewed ?? 3;
+    const model = opts.model ?? 'anthropic/claude-sonnet-4-6';
+    const cost = (opts.cost ?? 0.0123).toFixed(4);
+    const dateRange = opts.dateRange ?? `from 2026-04-25 to ${date}`;
+    const corpus = opts.corpus ?? ['2026-04-29-q3', '2026-04-27-q2', '2026-04-25-q1'];
+    const body = opts.body ?? `## Themes\n\nTheme one in *2026-04-29-q3*.\n\n## Action items\n\n- [ ] do this\n- [x] already done\n- [ ] another open one`;
+    return [
+      `# Deliberation reflection — ${date}`,
+      ``,
+      `> Generated by \`frqncy-harness frqncy --reflect\`. Reviewed ${recordsReviewed} deliberations ${dateRange}. Model: \`${model}\`. Cost: $${cost}.`,
+      ``,
+      `## Corpus reviewed`,
+      ``,
+      ...corpus.map((s) => `- *${s}*`),
+      ``,
+      `---`,
+      ``,
+      body,
+      ``,
+    ].join('\n');
+  }
+
+  it('parses date from H1', () => {
+    const r = parseReflection(makeReflectionRaw(), '2026-04-29-deliberation-reflection', '/x.md');
+    expect(r.date).toBe('2026-04-29');
+  });
+
+  it('parses provenance line (recordsReviewed, model, cost, dateRange)', () => {
+    const r = parseReflection(makeReflectionRaw(), 'slug', '/x.md');
+    expect(r.recordsReviewed).toBe(3);
+    expect(r.model).toBe('anthropic/claude-sonnet-4-6');
+    expect(r.costUsd).toBe(0.0123);
+    expect(r.dateRange).toContain('from 2026-04-25 to');
+  });
+
+  it('parses corpus list', () => {
+    const r = parseReflection(makeReflectionRaw(), 'slug', '/x.md');
+    expect(r.corpus).toEqual(['2026-04-29-q3', '2026-04-27-q2', '2026-04-25-q1']);
+  });
+
+  it('extracts action items distinguishing checked vs unchecked', () => {
+    const r = parseReflection(makeReflectionRaw(), 'slug', '/x.md');
+    expect(r.actionItems).toHaveLength(3);
+    expect(r.actionItems[0]).toEqual({ text: 'do this', done: false });
+    expect(r.actionItems[1]).toEqual({ text: 'already done', done: true });
+    expect(r.actionItems[2]).toEqual({ text: 'another open one', done: false });
+  });
+
+  it('returns empty actionItems when the section is missing', () => {
+    const raw = makeReflectionRaw({ body: '## Themes\n\njust themes here.' });
+    const r = parseReflection(raw, 'slug', '/x.md');
+    expect(r.actionItems).toEqual([]);
+  });
+
+  it('handles single-record provenance ("from <date>" without "to")', () => {
+    const raw = makeReflectionRaw({ recordsReviewed: 1, dateRange: 'from 2026-04-29' });
+    const r = parseReflection(raw, 'slug', '/x.md');
+    expect(r.recordsReviewed).toBe(1);
+    expect(r.dateRange).toBe('from 2026-04-29');
+  });
+});
+
+describe('loadReflections', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'frqncy-reflections-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function makeRaw(date: string): string {
+    return `# Deliberation reflection — ${date}
+
+> Generated by \`frqncy-harness frqncy --reflect\`. Reviewed 1 deliberation from ${date}. Model: \`m\`. Cost: $0.01.
+
+## Corpus reviewed
+
+- *${date}-q*
+
+---
+
+## Action items
+
+- [ ] open
+`;
+  }
+
+  it('returns [] when dir is missing', async () => {
+    expect(await loadReflections(join(dir, 'nope'))).toEqual([]);
+  });
+
+  it('returns [] when dir is empty', async () => {
+    expect(await loadReflections(dir)).toEqual([]);
+  });
+
+  it('loads .md files and skips others', async () => {
+    await writeFile(join(dir, '2026-04-29-r.md'), makeRaw('2026-04-29'), 'utf-8');
+    await writeFile(join(dir, 'README.txt'), 'not a reflection', 'utf-8');
+    const r = await loadReflections(dir);
+    expect(r).toHaveLength(1);
+    expect(r[0]!.slug).toBe('2026-04-29-r');
+  });
+
+  it('sorts by date descending', async () => {
+    await writeFile(join(dir, '2026-04-25-old.md'), makeRaw('2026-04-25'), 'utf-8');
+    await writeFile(join(dir, '2026-04-29-new.md'), makeRaw('2026-04-29'), 'utf-8');
+    await writeFile(join(dir, '2026-04-27-mid.md'), makeRaw('2026-04-27'), 'utf-8');
+    const r = await loadReflections(dir);
+    expect(r.map((x) => x.date)).toEqual(['2026-04-29', '2026-04-27', '2026-04-25']);
+  });
+});
+
+describe('runFrqncyReflectionsCommand', () => {
+  let dir: string;
+  let stdoutBuffer: string;
+  let originalWrite: typeof process.stdout.write;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'frqncy-reflections-cmd-'));
+    stdoutBuffer = '';
+    originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+      stdoutBuffer += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof process.stdout.write;
+  });
+  afterEach(async () => {
+    process.stdout.write = originalWrite;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('shows empty-state message when no reflections exist', async () => {
+    const result = await runFrqncyReflectionsCommand({ dir });
+    expect(result).toEqual([]);
+    expect(stdoutBuffer).toContain('no reflections yet');
+  });
+
+  it('lists reflections with action-item counts (open / done)', async () => {
+    const raw = `# Deliberation reflection — 2026-04-29
+
+> Generated by \`frqncy-harness frqncy --reflect\`. Reviewed 2 deliberations from 2026-04-25 to 2026-04-29. Model: \`m\`. Cost: $0.01.
+
+## Corpus reviewed
+
+- *2026-04-29-q1*
+- *2026-04-25-q2*
+
+---
+
+## Action items
+
+- [ ] open one
+- [ ] open two
+- [x] done one
+`;
+    await writeFile(join(dir, '2026-04-29-r.md'), raw, 'utf-8');
+    await runFrqncyReflectionsCommand({ dir });
+    expect(stdoutBuffer).toContain('2026-04-29-r');
+    expect(stdoutBuffer).toContain('2 open');
+    expect(stdoutBuffer).toContain('1 done');
+  });
+
+  it('emits structured JSON with --json', async () => {
+    const raw = `# Deliberation reflection — 2026-04-29
+
+> Generated by \`frqncy-harness frqncy --reflect\`. Reviewed 1 deliberation from 2026-04-29. Model: \`m\`. Cost: $0.01.
+
+## Corpus reviewed
+
+- *2026-04-29-q*
+
+---
+
+## Action items
+
+- [ ] open
+`;
+    await writeFile(join(dir, '2026-04-29-r.md'), raw, 'utf-8');
+    await runFrqncyReflectionsCommand({ dir, json: true });
+    const parsed = JSON.parse(stdoutBuffer);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].slug).toBe('2026-04-29-r');
+    expect(parsed[0].actionItems).toHaveLength(1);
+  });
+});
+
+describe('runFrqncyActionsCommand', () => {
+  let dir: string;
+  let stdoutBuffer: string;
+  let originalWrite: typeof process.stdout.write;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'frqncy-actions-cmd-'));
+    stdoutBuffer = '';
+    originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+      stdoutBuffer += typeof chunk === 'string' ? chunk : chunk.toString();
+      return true;
+    }) as typeof process.stdout.write;
+  });
+  afterEach(async () => {
+    process.stdout.write = originalWrite;
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function seedReflection(slug: string, date: string, items: string) {
+    const raw = `# Deliberation reflection — ${date}
+
+> Generated by \`frqncy-harness frqncy --reflect\`. Reviewed 1 deliberation from ${date}. Model: \`m\`. Cost: $0.01.
+
+## Corpus reviewed
+
+- *${date}-q*
+
+---
+
+## Action items
+
+${items}
+`;
+    await writeFile(join(dir, `${slug}.md`), raw, 'utf-8');
+  }
+
+  it('returns empty + clean-state hint when no open items', async () => {
+    await seedReflection('2026-04-29-r', '2026-04-29', '- [x] all done\n- [x] also done');
+    const result = await runFrqncyActionsCommand({ dir });
+    expect(result).toEqual([]);
+    expect(stdoutBuffer).toContain('no open action items');
+  });
+
+  it('lists open items grouped by reflection in date-desc order', async () => {
+    await seedReflection('2026-04-25-old', '2026-04-25', '- [ ] older open\n- [x] older done');
+    await seedReflection('2026-04-29-new', '2026-04-29', '- [ ] newer open A\n- [ ] newer open B');
+    await runFrqncyActionsCommand({ dir });
+    // Most-recent reflection should be rendered first
+    const newerIdx = stdoutBuffer.indexOf('2026-04-29-new');
+    const olderIdx = stdoutBuffer.indexOf('2026-04-25-old');
+    expect(newerIdx).toBeGreaterThan(0);
+    expect(olderIdx).toBeGreaterThan(newerIdx);
+    expect(stdoutBuffer).toContain('newer open A');
+    expect(stdoutBuffer).toContain('newer open B');
+    expect(stdoutBuffer).toContain('older open');
+    expect(stdoutBuffer).not.toContain('older done');
+  });
+
+  it('--include-done shows checked items too', async () => {
+    await seedReflection('2026-04-29-r', '2026-04-29', '- [ ] open\n- [x] done');
+    const result = await runFrqncyActionsCommand({ dir, includeDone: true });
+    expect(result).toHaveLength(2);
+    expect(stdoutBuffer).toContain('open');
+    expect(stdoutBuffer).toContain('done');
+  });
+
+  it('emits structured JSON with --json (includes reflectionSlug + reflectionDate per item)', async () => {
+    await seedReflection('2026-04-29-r', '2026-04-29', '- [ ] item one');
+    await runFrqncyActionsCommand({ dir, json: true });
+    const parsed = JSON.parse(stdoutBuffer);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({
+      text: 'item one',
+      done: false,
+      reflectionSlug: '2026-04-29-r',
+      reflectionDate: '2026-04-29',
+    });
   });
 });
 

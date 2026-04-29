@@ -1,6 +1,6 @@
 {
   "name": "@frqncy-network/harness",
-  "version": "0.13.4-alpha.1",
+  "version": "0.14.3-alpha.1",
   "description": "A plug-and-play LLM harness — provider-indifferent, trace-first, never compacted. Now with ERC-8004 + x402 agent commerce and a Daydreams bridge.",
   "type": "module",
   "main": "./dist/index.js",
@@ -40,6 +40,7 @@
   },
   "files": [
     "dist",
+    "skills",
     "README.md",
     "AGENT.md",
     "LICENSE",

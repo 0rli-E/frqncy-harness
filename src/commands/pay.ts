@@ -25,7 +25,7 @@ import {
 } from '../payments/facilitator.js';
 import { DEFAULT_TRACE_DIR } from '../trace.js';
 
-export type PaySubcommand = 'test' | 'balance' | 'budget' | 'discover' | 'history';
+export type PaySubcommand = 'test' | 'balance' | 'budget' | 'discover' | 'history' | 'quote';
 
 export async function runPayCommand(sub: PaySubcommand, args: string[]): Promise<void> {
   switch (sub) {
@@ -43,6 +43,9 @@ export async function runPayCommand(sub: PaySubcommand, args: string[]): Promise
       return;
     case 'history':
       await historyCmd(args);
+      return;
+    case 'quote':
+      await quoteCmd(args[0], args.slice(1));
       return;
     default:
       throw new Error(`unknown pay subcommand: ${sub}`);
@@ -320,6 +323,85 @@ async function historyCmd(args: string[]): Promise<void> {
       `${rec.ts}  ${arrow} ${amt}  ${c.network ?? '?'}  ${status}${tx}  ${c.resource ?? ''}\n`,
     );
   }
+}
+
+/**
+ * `pay quote <url>` — preview x402 pricing for a URL without paying.
+ *
+ * Probes the URL with no payment header, expects a 402 + PaymentRequiredBody,
+ * renders each acceptable PaymentRequirements as: scheme, network, atomic-USDC
+ * + USD, asset, payTo, description. Pure read; no signature, no chain hop.
+ *
+ * Use this before `pay test` (which actually pays) or before letting an agent
+ * invoke the `pay` tool — it's the dry-run path.
+ */
+async function quoteCmd(url: string | undefined, args: string[]): Promise<void> {
+  if (!url) throw new Error('Usage: frqncy-harness pay quote <url> [--json]');
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--json') json = true;
+  }
+
+  const { PaymentRequiredBodySchema } = await import('../payments/index.js');
+  const res = await fetch(url, { method: 'GET' });
+  if (res.status !== 402) {
+    if (json) {
+      process.stdout.write(
+        JSON.stringify(
+          { url, status: res.status, paymentRequired: false, note: 'endpoint did not return 402' },
+          null,
+          2,
+        ) + '\n',
+      );
+      return;
+    }
+    process.stdout.write(
+      `${url} returned ${res.status} — not an x402 paywalled endpoint.\n`,
+    );
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch (err) {
+    throw new Error(`pay quote: 402 body is not JSON — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  let parsed;
+  try {
+    parsed = PaymentRequiredBodySchema.parse(body);
+  } catch (err) {
+    throw new Error(
+      `pay quote: 402 body did not match the x402 v1 PaymentRequiredBody schema: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
+  if (json) {
+    process.stdout.write(JSON.stringify({ url, x402Version: parsed.x402Version, accepts: parsed.accepts }, null, 2) + '\n');
+    return;
+  }
+
+  process.stdout.write(`${url} — x402 v${parsed.x402Version}\n`);
+  if (parsed.error) process.stdout.write(`  error: ${parsed.error}\n`);
+  process.stdout.write(`  ${parsed.accepts.length} acceptable payment requirement(s):\n\n`);
+  for (let i = 0; i < parsed.accepts.length; i++) {
+    const r = parsed.accepts[i]!;
+    const atomic = BigInt(r.maxAmountRequired);
+    process.stdout.write(`  [${i + 1}] ${r.scheme} on ${r.network}\n`);
+    process.stdout.write(`      price:       ${formatAtomicUsdc(atomic)} (${r.maxAmountRequired} atomic)\n`);
+    process.stdout.write(`      asset:       ${r.asset}\n`);
+    process.stdout.write(`      payTo:       ${r.payTo}\n`);
+    process.stdout.write(`      timeout:     ${r.maxTimeoutSeconds}s\n`);
+    if (r.description) process.stdout.write(`      description: ${r.description}\n`);
+    if (r.extra) process.stdout.write(`      extra:       ${JSON.stringify(r.extra)}\n`);
+    process.stdout.write('\n');
+  }
+  process.stdout.write(
+    `Run 'frqncy-harness pay test ${url} --max ${parsed.accepts[0]?.maxAmountRequired ?? '<atomic>'}' to pay.\n`,
+  );
 }
 
 async function discoverCmd(): Promise<void> {

@@ -113,3 +113,24 @@ export {
   type CreateSettleFeedbackWriterOptions,
   type LookupAgentId,
 } from './feedback.js';
+
+export {
+  signSettlementReceipt,
+  verifySettlementReceipt,
+  encodeReceiptHeader,
+  decodeReceiptHeader,
+  createReceiptIssuer,
+  SettlementReceiptSchema,
+  SETTLEMENT_RECEIPT_PRIMARY_TYPE,
+  SETTLEMENT_RECEIPT_TYPES,
+  X402_RECEIPT_HEADER,
+  DEFAULT_RECEIPT_DOMAIN_NAME,
+  DEFAULT_RECEIPT_DOMAIN_VERSION,
+  type SettlementReceipt,
+  type SignedSettlementReceipt,
+  type SignSettlementReceiptOptions,
+  type VerifySettlementReceiptOptions,
+  type VerifyResult as VerifyReceiptResult,
+  type ReceiptDomain,
+  type CreateReceiptIssuerOptions,
+} from './receipt.js';

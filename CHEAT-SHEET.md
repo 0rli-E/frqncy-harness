@@ -468,6 +468,78 @@ frqncy-harness frqncy --show kali --json | jq .frontmatter
 # → structured output for scripting
 ```
 
+**Inspect reflections + extract action items (v0.14.3):**
+
+```
+frqncy-harness frqncy --reflections
+# → list every saved reflection with action-item counts (open / done).
+
+frqncy-harness frqncy --actions
+# → flat list of every OPEN action item across all reflections, grouped by date.
+#   The org showing you what it told itself to do.
+
+frqncy-harness frqncy --actions --include-done
+# → also show completed items
+
+frqncy-harness frqncy --actions --json | jq -r '.[] | "\(.reflectionDate)  \(.text)"'
+# → pipe into your task system
+```
+
+To check off an action: open the reflection file (`frqncy --reflections --json | jq -r '.[].path'`) and change `- [ ]` to `- [x]`.
+
+**Reflect across deliberations (v0.14.2):**
+
+```
+frqncy-harness frqncy --reflect
+# → reads the 10 most-recent deliberations, asks the Learning Agent (Sonnet by default)
+#   to surface themes, routing patterns, voice signals, action items, open questions.
+#   Costs LLM tokens. Output streams to stdout.
+
+frqncy-harness frqncy --reflect --last 5 --since 2026-04-01 --save
+# → narrower corpus, written to proposals/reflections/<date>-deliberation-reflection.md
+#   with full provenance (records reviewed, model, cost).
+
+frqncy-harness frqncy --reflect --output /tmp/this-week.md
+# → custom destination
+```
+
+The reflection runs as the **Learning Agent persona** (thread `frqncy-os/learning-agent`), so reflections themselves accumulate as a queryable corpus. The org learning how it learns.
+
+**List & inspect saved deliberations (v0.14.1):**
+
+```
+frqncy-harness frqncy --deliberations
+# → every .md file in proposals/council-deliberations/, with question, member count,
+#   cost, synthesis status. Sorted by date desc. No LLM cost.
+
+frqncy-harness frqncy --deliberation 2026-04-29-should-we-take-the-lugano
+# → drill into one: question, routing reason, members (with model/cost/conv-id),
+#   full synthesis text, source provenance.
+
+frqncy-harness frqncy --deliberations --json | jq '.[] | select(.hasSynthesis == false) | .slug'
+# → which deliberations are still awaiting synthesis?
+```
+
+**Inspect what a persona "remembers" (v0.14.0):**
+
+```
+frqncy-harness frqncy --history kali
+# → prints every prior user/assistant turn Kali would auto-load on her next
+#   invocation. Pure read of the trace store — no LLM cost.
+
+frqncy-harness frqncy --history kali --max-convos 3 --max-messages 10
+# → cap the lookback window
+```
+
+Persona memory is ON by default for every persona invocation in v0.14.0+ — Kali remembers her prior conversations with Orli. To invoke a persona stateless (e.g., for testing a fresh prompt), pass `--no-memory`:
+
+```
+frqncy-harness frqncy --persona kali --no-memory "fresh start"
+# → Kali responds without prior thread context
+```
+
+Routing and synthesis passes are always stateless — FRQNCY's routing decision shouldn't be biased by prior context, and FRQNCY's synthesis should integrate THIS convene's voices, not drift from past convenes. This is enforced regardless of `--no-memory`.
+
 **The 34 personas:**
 
 | Tier | Personas | Voice |

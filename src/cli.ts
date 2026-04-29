@@ -36,10 +36,17 @@ import {
   runFrqncyListCommand,
   runFrqncyValidateCommand,
   runFrqncyShowCommand,
+  runFrqncyHistoryCommand,
+  runFrqncyDeliberationsCommand,
+  runFrqncyDeliberationCommand,
+  runFrqncyReflectCommand,
+  runFrqncyReflectionsCommand,
+  runFrqncyActionsCommand,
 } from './commands/frqncy.js';
 import { runLearningAgentCommand, type LearningAgentSubcommand } from './commands/learning-agent.js';
 import { runIdentityCommand, type IdentitySubcommand } from './commands/identity.js';
 import { runPayCommand, type PaySubcommand } from './commands/pay.js';
+import { runServeCommand } from './commands/serve.js';
 import { hydrateApiKeysIntoEnv } from './auth/index.js';
 
 const HELP = `
@@ -85,15 +92,31 @@ Commands:
                             /.well-known/agent-card.json + /.well-known/agent-registration.json. Requires
                             wallet credentials — set via 'auth set cdp-api-key-id …' or env vars.)
   pay <subcmd> [args]      test <url> [--max <atomic>] [--feedback-agent <id>] | balance | budget [show|set <usd>]
-                           | discover | history [--last N] [--thread <id>] [--direction in|out] [--json]
-                           (x402 micropayments. 'pay test' hits a 402'd URL and auto-pays under the cap.
+                           | discover | quote <url> [--json] | history [--last N] [--thread <id>] [--direction in|out] [--json]
+                           (x402 micropayments. 'pay quote' previews 402 pricing without paying.
+                            'pay test' hits a 402'd URL and auto-pays under the cap.
                             'pay balance' reads native USDC on the agent's smart account + EOA.
                             'pay discover' queries the facilitator's registry of paid resources.
                             'pay history' tails the trace store for 'payment' records.)
+  serve [options]          Spin up an x402-paid agent endpoint. Each skill becomes a
+                           POST /skills/<name> route gated by the payment middleware;
+                           /.well-known/agent-card.json + /healthz are always served.
+                           Options: --port <n> (default 3030)
+                                    --skill <name> --price <usd>  (repeatable; pairs)
+                                    --route-model <m>             (per-skill model override)
+                                    --network base|base-sepolia
+                                    --pay-to 0x...                (override receiver)
+                                    --model <m>                   (default model for skills)
+                                    --agent-id <n>                (advertise registered agentId)
+                                    --config-only                 (skip CLI --skill flags)
+                           Or define routes in config.serve.routes[]. See proposals/AGENT-AS-SERVICE.md.
   skills <subcmd> [args]   list | show <name> | path | match "<prompt>"
+                           | install <bundle> [--force] [--symlink]
                            (Skills are markdown packs at ~/.frqncy-harness/skills/<name>/SKILL.md
                             with YAML frontmatter; auto-injected into chat/repl/agent system prompts
-                            when the prompt matches the skill's keywords or description.)
+                            when the prompt matches the skill's keywords or description.
+                            'install daydreams' copies the bundled skill packs that mirror the
+                            Daydreams + Lucid extension surface — wallet, DeFi, social, MCP, etc.)
   replay <conv-id>         Re-run a saved conversation against a (potentially different) model.
                            Options: --model <m>, --diff, --json, --thread <id>
                            (--diff prints a side-by-side comparison vs the original assistant reply.)
@@ -187,11 +210,41 @@ Commands:
                                                                 (frontmatter + full system
                                                                 prompt, byte count,
                                                                 inoculation status)
+                             frqncy --history <slug>          → show what one persona
+                                                                "remembers" — prior thread
+                                                                history loaded from the
+                                                                trace store (v0.14.0)
+                             frqncy --deliberations           → list every saved
+                                                                deliberation file with
+                                                                question, members, cost,
+                                                                synthesis status (v0.14.1)
+                             frqncy --deliberation <slug>     → drill into one deliberation
+                                                                (question, routing reason,
+                                                                members, synthesis text)
+                             frqncy --reflect                 → cross-deliberation
+                                                                reflection. Reads N most-
+                                                                recent deliberations and
+                                                                surfaces themes, routing
+                                                                patterns, voice signals,
+                                                                action items. Costs LLM
+                                                                tokens. --save writes to
+                                                                proposals/reflections/.
+                             frqncy --reflections             → list every saved
+                                                                reflection with action-
+                                                                item counts (v0.14.3)
+                             frqncy --actions                 → open action items across
+                                                                all reflections, grouped
+                                                                by date. --include-done
+                                                                shows completed too.
                            Personas: 1 FRQNCY + 7 Council + 6 C-Suite + 19 Workers + Learning Agent.
                            All traces tagged thread=frqncy-os/<persona>, project=frqncy-os —
                            queryable via reflect/codify/gain/costs.
-                           Options: --persona <name>, --council, --no-route, --save, --list,
-                                    --validate, --show <slug>, --persona-dir <path>,
+                           Memory: every persona auto-loads its prior thread history
+                           (v0.14.0). Disable per-call with --no-memory. Inspect with
+                           --history <slug>.
+                           Options: --persona <name>, --council, --no-route, --no-memory,
+                                    --save, --list, --validate, --show <slug>,
+                                    --history <slug>, --persona-dir <path>,
                                     --model <m>, --json
                            --save: with --council, writes a structured deliberation
                            record to proposals/council-deliberations/<date>-<slug>.md
@@ -258,7 +311,7 @@ Examples:
 Docs: https://github.com/0rli-E/frqncy-harness#readme
 `;
 
-const VERSION = '0.13.4-alpha.1';
+const VERSION = '0.14.3-alpha.1';
 
 interface ParsedArgs {
   command?: string;
@@ -557,13 +610,82 @@ async function main(): Promise<void> {
           });
           break;
         }
+        // --history <slug> is prompt-free: show what one persona "remembers" (v0.14.0).
+        const historySlug = flagString(flags, 'history');
+        if (historySlug) {
+          const maxConvos = flagString(flags, 'max-convos');
+          const maxMsgs = flagString(flags, 'max-messages');
+          const maxBytes = flagString(flags, 'max-bytes');
+          await runFrqncyHistoryCommand(historySlug, {
+            ...(flagString(flags, 'trace-dir') ? { traceDir: flagString(flags, 'trace-dir')! } : {}),
+            ...(maxConvos ? { maxConversations: Number(maxConvos) } : {}),
+            ...(maxMsgs ? { maxMessages: Number(maxMsgs) } : {}),
+            ...(maxBytes ? { maxBytes: Number(maxBytes) } : {}),
+            json: flagBool(flags, 'json'),
+          });
+          break;
+        }
+        // --deliberations is prompt-free: list every saved deliberation file (v0.14.1).
+        if (flagBool(flags, 'deliberations')) {
+          await runFrqncyDeliberationsCommand({
+            ...(flagString(flags, 'deliberations-dir') ? { dir: flagString(flags, 'deliberations-dir')! } : {}),
+            json: flagBool(flags, 'json'),
+          });
+          break;
+        }
+        // --deliberation <slug> is prompt-free: drill into one deliberation (v0.14.1).
+        const delibSlug = flagString(flags, 'deliberation');
+        if (delibSlug) {
+          await runFrqncyDeliberationCommand(delibSlug, {
+            ...(flagString(flags, 'deliberations-dir') ? { dir: flagString(flags, 'deliberations-dir')! } : {}),
+            json: flagBool(flags, 'json'),
+          });
+          break;
+        }
+        // --reflections: list every saved reflection (v0.14.3).
+        if (flagBool(flags, 'reflections')) {
+          await runFrqncyReflectionsCommand({
+            ...(flagString(flags, 'reflections-dir') ? { dir: flagString(flags, 'reflections-dir')! } : {}),
+            json: flagBool(flags, 'json'),
+          });
+          break;
+        }
+        // --actions: open action items across all reflections (v0.14.3).
+        if (flagBool(flags, 'actions')) {
+          await runFrqncyActionsCommand({
+            ...(flagString(flags, 'reflections-dir') ? { dir: flagString(flags, 'reflections-dir')! } : {}),
+            includeDone: flagBool(flags, 'include-done'),
+            json: flagBool(flags, 'json'),
+          });
+          break;
+        }
+        // --reflect: cross-deliberation reflection (v0.14.2). Costs LLM tokens.
+        if (flagBool(flags, 'reflect')) {
+          const lastStr = flagString(flags, 'last');
+          await runFrqncyReflectCommand({
+            ...(flagString(flags, 'deliberations-dir') ? { dir: flagString(flags, 'deliberations-dir')! } : {}),
+            ...(lastStr ? { last: Number(lastStr) } : {}),
+            ...(flagString(flags, 'since') ? { since: flagString(flags, 'since')! } : {}),
+            ...(flagString(flags, 'model') ? { model: flagString(flags, 'model')! } : {}),
+            ...(flagString(flags, 'output') ? { output: flagString(flags, 'output')! } : {}),
+            save: flagBool(flags, 'save'),
+            json: flagBool(flags, 'json'),
+          });
+          break;
+        }
         const frqncyPrompt = positional.join(' ');
         if (!frqncyPrompt.trim()) {
           throw new Error(
-            'Usage: frqncy-harness frqncy "<prompt>" [--persona <name>] [--council] [--no-route] [--save] [--model <m>] [--json]\n' +
+            'Usage: frqncy-harness frqncy "<prompt>" [--persona <name>] [--council] [--no-route] [--no-memory] [--save] [--model <m>] [--json]\n' +
               '       frqncy-harness frqncy --list [--json]\n' +
               '       frqncy-harness frqncy --validate [--json]\n' +
-              '       frqncy-harness frqncy --show <slug> [--json]',
+              '       frqncy-harness frqncy --show <slug> [--json]\n' +
+              '       frqncy-harness frqncy --history <slug> [--max-convos N] [--max-messages N] [--max-bytes N] [--json]\n' +
+              '       frqncy-harness frqncy --deliberations [--json]\n' +
+              '       frqncy-harness frqncy --deliberation <slug> [--json]\n' +
+              '       frqncy-harness frqncy --reflect [--last N] [--since YYYY-MM-DD] [--save] [--output <path>] [--model <m>] [--json]\n' +
+              '       frqncy-harness frqncy --reflections [--json]\n' +
+              '       frqncy-harness frqncy --actions [--include-done] [--json]',
           );
         }
         await runFrqncyCommand(frqncyPrompt, {
@@ -571,6 +693,7 @@ async function main(): Promise<void> {
           council: flagBool(flags, 'council'),
           noRoute: flagBool(flags, 'no-route'),
           save: flagBool(flags, 'save'),
+          noMemory: flagBool(flags, 'no-memory'),
           ...(flagString(flags, 'model') ? { model: flagString(flags, 'model')! } : {}),
           json: flagBool(flags, 'json'),
         });
@@ -620,9 +743,73 @@ async function main(): Promise<void> {
       case 'pay': {
         const sub = positional[0] as PaySubcommand | undefined;
         if (!sub) {
-          throw new Error('Usage: frqncy-harness pay <test|balance|budget|discover> [args]');
+          throw new Error(
+            'Usage: frqncy-harness pay <test|balance|budget|discover|quote|history> [args]',
+          );
         }
         await runPayCommand(sub, positional.slice(1));
+        break;
+      }
+      case 'serve': {
+        // Pair --skill / --price flags positionally so multiple skills
+        // register in one call. The parser flattens flags into a flat record,
+        // so we re-walk the raw positional/flag interleaving here.
+        const portStr = flagString(flags, 'port');
+        const networkStr = flagString(flags, 'network');
+        const payToStr = flagString(flags, 'pay-to');
+        const modelStr = flagString(flags, 'model');
+        const agentIdStr = flagString(flags, 'agent-id');
+        const configOnly = flagBool(flags, 'config-only');
+
+        // Re-parse argv specifically for the --skill/--price pairing.
+        const skillPrices: Array<{ skill: string; priceUsdCents: number; model?: string }> = [];
+        const argv = process.argv.slice(2);
+        // Skip past the leading "serve" verb for our local walk.
+        let i = argv.indexOf('serve');
+        i = i < 0 ? 0 : i + 1;
+        let pendingSkill: string | undefined;
+        let pendingModel: string | undefined;
+        for (; i < argv.length; i++) {
+          const a = argv[i]!;
+          if (a === '--skill') {
+            // Flush any prior skill that didn't get a --price
+            if (pendingSkill && skillPrices[skillPrices.length - 1]?.skill !== pendingSkill) {
+              throw new Error(
+                `serve: --skill ${pendingSkill} has no matching --price flag`,
+              );
+            }
+            pendingSkill = argv[++i];
+            pendingModel = undefined;
+          } else if (a === '--price' && pendingSkill) {
+            const usd = Number(argv[++i] ?? '0');
+            if (!Number.isFinite(usd) || usd < 0) {
+              throw new Error(`serve: invalid --price for skill ${pendingSkill}`);
+            }
+            const entry: { skill: string; priceUsdCents: number; model?: string } = {
+              skill: pendingSkill,
+              priceUsdCents: Math.round(usd * 100),
+            };
+            if (pendingModel) entry.model = pendingModel;
+            skillPrices.push(entry);
+            pendingSkill = undefined;
+            pendingModel = undefined;
+          } else if (a === '--route-model' && pendingSkill) {
+            pendingModel = argv[++i];
+          }
+        }
+        if (pendingSkill) {
+          throw new Error(`serve: --skill ${pendingSkill} has no matching --price flag`);
+        }
+
+        await runServeCommand({
+          ...(portStr ? { port: Number(portStr) } : {}),
+          ...(networkStr ? { network: networkStr as 'base' | 'base-sepolia' } : {}),
+          ...(payToStr ? { payTo: payToStr as `0x${string}` } : {}),
+          ...(modelStr ? { model: modelStr } : {}),
+          ...(agentIdStr ? { agentId: Number(agentIdStr) } : {}),
+          configOnly,
+          skillPrices,
+        });
         break;
       }
       case 'evolve': {

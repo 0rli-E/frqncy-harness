@@ -265,6 +265,20 @@ export interface ChatInput extends z.infer<typeof ChatInputSchema> {
    * resources without the LLM having to invoke the `pay` tool explicitly.
    */
   toolFetch?: typeof fetch;
+  /**
+   * v0.14.0 — opt-in: prepend prior turns from this thread's trace history
+   * onto the messages array before the call. Realizes "the trace IS the
+   * memory" at the chat() level. Requires `threadId` to be set; otherwise
+   * a no-op. Off by default for backward compatibility (existing callers
+   * that pass full message arrays don't accidentally double-up history).
+   * FRQNCY OS persona invocations turn this ON by default.
+   */
+  loadHistory?: boolean | {
+    maxConversations?: number;
+    maxMessages?: number;
+    maxBytes?: number;
+    includeAborted?: boolean;
+  };
 }
 
 export interface ChatResult {

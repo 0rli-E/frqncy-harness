@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { ModelStringSchema } from './types.js';
 import { HooksConfigSchema } from './hooks/index.js';
 import { AutoFeedbackConfigSchema } from './payments/feedback.js';
+import { ServeConfigSchema } from './serve/config.js';
 
 export const DEFAULT_CONFIG_PATH = join(homedir(), '.frqncy-harness', 'config.json');
 
@@ -70,6 +71,13 @@ export const ConfigSchema = z.object({
       autoFeedback: AutoFeedbackConfigSchema.default({}),
     })
     .default({}),
+
+  /**
+   * `frqncy-harness serve` config (v0.14+) — defines paid skill endpoints
+   * the agent exposes. CLI flags merge ON TOP of these (CLI wins on duplicates).
+   * See proposals/AGENT-AS-SERVICE.md.
+   */
+  serve: ServeConfigSchema.optional(),
 });
 export type Config = z.infer<typeof ConfigSchema>;
 
